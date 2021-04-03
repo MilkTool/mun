@@ -1,22 +1,18 @@
 #![allow(dead_code)]
 use mun_memory::{
     diff::{myers, Diff, FieldDiff, FieldEditKind},
-    TypeDesc, TypeFields, TypeMemory,
+    TypeDesc, TypeFields, TypeGroup, TypeMemory,
 };
 use std::alloc::Layout;
 
 pub const STRUCT1_NAME: &str = "struct1";
-pub const STRUCT1_GUID: abi::Guid = abi::Guid {
-    b: [
-        0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150,
-    ],
-};
+pub const STRUCT1_GUID: abi::Guid = abi::Guid([
+    0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150,
+]);
 pub const STRUCT2_NAME: &str = "struct2";
-pub const STRUCT2_GUID: abi::Guid = abi::Guid {
-    b: [
-        150, 140, 130, 120, 110, 100, 90, 80, 70, 60, 50, 40, 30, 20, 10, 0,
-    ],
-};
+pub const STRUCT2_GUID: abi::Guid = abi::Guid([
+    150, 140, 130, 120, 110, 100, 90, 80, 70, 60, 50, 40, 30, 20, 10, 0,
+]);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StructInfo {
@@ -46,19 +42,18 @@ impl StructInfo {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum TypeInfoTail {
-    Empty,
-    Struct(StructInfo),
-}
-
 #[derive(Clone, Debug)]
 pub struct TypeInfo {
     pub name: String,
     pub guid: abi::Guid,
-    pub group: abi::TypeGroup,
     pub layout: Layout,
-    pub tail: TypeInfoTail,
+    pub data: TypeInfoData,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum TypeInfoData {
+    Primitive,
+    Struct(StructInfo),
 }
 
 impl TypeInfo {
@@ -67,9 +62,8 @@ impl TypeInfo {
         Self {
             name: type_info.name().to_string(),
             guid: type_info.guid,
-            group: abi::TypeGroup::FundamentalTypes,
             layout: Layout::new::<T>(),
-            tail: TypeInfoTail::Empty,
+            data: TypeInfoData::Primitive,
         }
     }
 
@@ -77,9 +71,8 @@ impl TypeInfo {
         Self {
             name: name.to_string(),
             guid,
-            group: abi::TypeGroup::StructTypes,
             layout: struct_info.layout(),
-            tail: TypeInfoTail::Struct(struct_info),
+            data: TypeInfoData::Struct(struct_info),
         }
     }
 }
@@ -101,8 +94,11 @@ impl TypeDesc for &TypeInfo {
     fn guid(&self) -> &abi::Guid {
         &self.guid
     }
-    fn group(&self) -> abi::TypeGroup {
-        self.group
+    fn group(&self) -> TypeGroup {
+        match self.data {
+            TypeInfoData::Primitive => TypeGroup::Primitive,
+            TypeInfoData::Struct(_) => TypeGroup::Struct,
+        }
     }
 }
 
@@ -119,9 +115,9 @@ impl TypeMemory for &TypeInfo {
 
 impl<'t> TypeFields<&'t TypeInfo> for &'t TypeInfo {
     fn fields(&self) -> Vec<(&str, Self)> {
-        match &self.tail {
-            TypeInfoTail::Empty => Vec::new(),
-            TypeInfoTail::Struct(s) => s
+        match &self.data {
+            TypeInfoData::Primitive => Vec::new(),
+            TypeInfoData::Struct(s) => s
                 .fields
                 .iter()
                 .map(|(name, ty)| (name.as_str(), ty))
@@ -197,8 +193,8 @@ pub(crate) fn apply_diff<'t>(
 }
 
 fn apply_mapping<'t>(old: &mut TypeInfo, new: &TypeInfo, mapping: &[FieldDiff]) {
-    if let TypeInfoTail::Struct(old_struct) = &mut old.tail {
-        if let TypeInfoTail::Struct(new_struct) = &new.tail {
+    if let TypeInfoData::Struct(old_struct) = &mut old.data {
+        if let TypeInfoData::Struct(new_struct) = &new.data {
             let mut combined: Vec<_> = old_struct.fields.iter().cloned().collect();
             for diff in mapping.iter().rev() {
                 match diff {

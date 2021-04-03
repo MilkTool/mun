@@ -1,13 +1,12 @@
 use mun_runtime::{invoke_fn, StructRef};
+use mun_test::CompileAndRunTestDriver;
 
 #[macro_use]
 mod util;
 
-use util::*;
-
 #[test]
 fn gc_trace() {
-    let mut driver = TestDriver::new(
+    let driver = CompileAndRunTestDriver::new(
         r#"
     pub struct Foo {
         quz: f64,
@@ -27,7 +26,9 @@ fn gc_trace() {
         }
     }
     "#,
-    );
+        |builder| builder,
+    )
+    .expect("Failed to build test driver");
 
     let runtime = driver.runtime();
     let runtime_ref = runtime.borrow();
@@ -46,7 +47,7 @@ fn gc_trace() {
 
 #[test]
 fn map_struct_insert_field1() {
-    let mut driver = TestDriver::new(
+    let mut driver = CompileAndRunTestDriver::new(
         r#"
         struct Foo {
             b: i64,
@@ -57,7 +58,9 @@ fn map_struct_insert_field1() {
             Foo { b, c }
         }
     "#,
-    );
+        |builder| builder,
+    )
+    .expect("Failed to build test driver");
 
     let runtime = driver.runtime();
     let runtime_ref = runtime.borrow();
@@ -69,6 +72,7 @@ fn map_struct_insert_field1() {
 
     driver.update(
         runtime_ref,
+        "mod.mun",
         r#"
         struct Foo {
             a: i64,
@@ -84,7 +88,7 @@ fn map_struct_insert_field1() {
 
 #[test]
 fn map_struct_insert_field2() {
-    let mut driver = TestDriver::new(
+    let mut driver = CompileAndRunTestDriver::new(
         r#"
         struct Foo {
             a: i64,
@@ -95,7 +99,9 @@ fn map_struct_insert_field2() {
             Foo { a, c }
         }
     "#,
-    );
+        |builder| builder,
+    )
+    .expect("Failed to build test driver");
 
     let runtime = driver.runtime();
     let runtime_ref = runtime.borrow();
@@ -107,6 +113,7 @@ fn map_struct_insert_field2() {
 
     driver.update(
         runtime_ref,
+        "mod.mun",
         r#"
         struct Foo {
             a: i64,
@@ -122,7 +129,7 @@ fn map_struct_insert_field2() {
 
 #[test]
 fn map_struct_insert_field3() {
-    let mut driver = TestDriver::new(
+    let mut driver = CompileAndRunTestDriver::new(
         r#"
         struct Foo {
             a: i64,
@@ -133,7 +140,9 @@ fn map_struct_insert_field3() {
             Foo { a, b }
         }
     "#,
-    );
+        |builder| builder,
+    )
+    .expect("Failed to build test driver");
 
     let runtime = driver.runtime();
     let runtime_ref = runtime.borrow();
@@ -145,6 +154,7 @@ fn map_struct_insert_field3() {
 
     driver.update(
         runtime_ref,
+        "mod.mun",
         r#"
         struct Foo {
             a: i64,
@@ -160,7 +170,7 @@ fn map_struct_insert_field3() {
 
 #[test]
 fn map_struct_remove_field1() {
-    let mut driver = TestDriver::new(
+    let mut driver = CompileAndRunTestDriver::new(
         r#"
         struct Foo {
             a: f64,
@@ -172,7 +182,9 @@ fn map_struct_remove_field1() {
             Foo { a, b, c }
         }
     "#,
-    );
+        |builder| builder,
+    )
+    .expect("Failed to build test driver");
 
     let runtime = driver.runtime();
     let runtime_ref = runtime.borrow();
@@ -185,6 +197,7 @@ fn map_struct_remove_field1() {
 
     driver.update(
         runtime_ref,
+        "mod.mun",
         r#"
         struct Foo {
             c: i64,
@@ -196,7 +209,7 @@ fn map_struct_remove_field1() {
 
 #[test]
 fn map_struct_remove_field2() {
-    let mut driver = TestDriver::new(
+    let mut driver = CompileAndRunTestDriver::new(
         r#"
         struct Foo {
             a: f64,
@@ -208,7 +221,9 @@ fn map_struct_remove_field2() {
             Foo { a, b, c }
         }
     "#,
-    );
+        |builder| builder,
+    )
+    .expect("Failed to build test driver");
 
     let runtime = driver.runtime();
     let runtime_ref = runtime.borrow();
@@ -221,6 +236,7 @@ fn map_struct_remove_field2() {
 
     driver.update(
         runtime_ref,
+        "mod.mun",
         r#"
         struct Foo {
             b: i64,
@@ -232,7 +248,7 @@ fn map_struct_remove_field2() {
 
 #[test]
 fn map_struct_remove_field3() {
-    let mut driver = TestDriver::new(
+    let mut driver = CompileAndRunTestDriver::new(
         r#"
         struct Foo {
             a: i64,
@@ -244,7 +260,9 @@ fn map_struct_remove_field3() {
             Foo { a, b, c }
         }
     "#,
-    );
+        |builder| builder,
+    )
+    .expect("Failed to build test driver");
 
     let runtime = driver.runtime();
     let runtime_ref = runtime.borrow();
@@ -257,6 +275,7 @@ fn map_struct_remove_field3() {
 
     driver.update(
         runtime_ref,
+        "mod.mun",
         r#"
         struct Foo {
             a: i64,
@@ -268,7 +287,7 @@ fn map_struct_remove_field3() {
 
 #[test]
 fn map_struct_cast_fields1() {
-    let mut driver = TestDriver::new(
+    let mut driver = CompileAndRunTestDriver::new(
         r#"
         struct Foo(
             u8,
@@ -282,7 +301,9 @@ fn map_struct_cast_fields1() {
             Foo(a, b, c, d, e)
         }
     "#,
-    );
+        |builder| builder,
+    )
+    .expect("Failed to build test driver");
 
     let runtime = driver.runtime();
     let runtime_ref = runtime.borrow();
@@ -297,6 +318,7 @@ fn map_struct_cast_fields1() {
 
     driver.update(
         runtime_ref,
+        "mod.mun",
         r#"
         struct Foo(
             u16,
@@ -316,7 +338,7 @@ fn map_struct_cast_fields1() {
 
 #[test]
 fn map_struct_cast_fields2() {
-    let mut driver = TestDriver::new(
+    let mut driver = CompileAndRunTestDriver::new(
         r#"
         struct Foo(
             i16,
@@ -326,7 +348,9 @@ fn map_struct_cast_fields2() {
             Foo(a)
         }
     "#,
-    );
+        |builder| builder,
+    )
+    .expect("Failed to build test driver");
 
     let runtime = driver.runtime();
     let runtime_ref = runtime.borrow();
@@ -337,6 +361,7 @@ fn map_struct_cast_fields2() {
 
     driver.update(
         runtime_ref,
+        "mod.mun",
         r#"
         struct Foo(
             u16,    // Cannot convert from `i16` to `u16`
@@ -349,7 +374,7 @@ fn map_struct_cast_fields2() {
 
 #[test]
 fn map_struct_swap_fields1() {
-    let mut driver = TestDriver::new(
+    let mut driver = CompileAndRunTestDriver::new(
         r#"
         struct Foo {
             a: f64,
@@ -361,7 +386,9 @@ fn map_struct_swap_fields1() {
             Foo { a, b, c }
         }
     "#,
-    );
+        |builder| builder,
+    )
+    .expect("Failed to build test driver");
 
     let runtime = driver.runtime();
     let runtime_ref = runtime.borrow();
@@ -374,6 +401,7 @@ fn map_struct_swap_fields1() {
 
     driver.update(
         runtime_ref,
+        "mod.mun",
         r#"
         struct Foo {
             c: f64,
@@ -389,7 +417,7 @@ fn map_struct_swap_fields1() {
 
 #[test]
 fn map_struct_swap_fields2() {
-    let mut driver = TestDriver::new(
+    let mut driver = CompileAndRunTestDriver::new(
         r#"
         struct Foo {
             a: f64,
@@ -402,7 +430,9 @@ fn map_struct_swap_fields2() {
             Foo { a, b, c, d }
         }
     "#,
-    );
+        |builder| builder,
+    )
+    .expect("Failed to build test driver");
 
     let runtime = driver.runtime();
     let runtime_ref = runtime.borrow();
@@ -416,6 +446,7 @@ fn map_struct_swap_fields2() {
 
     driver.update(
         runtime_ref,
+        "mod.mun",
         r#"
         struct Foo {
             d: i64,
@@ -433,7 +464,7 @@ fn map_struct_swap_fields2() {
 
 #[test]
 fn map_struct_rename_field1() {
-    let mut driver = TestDriver::new(
+    let mut driver = CompileAndRunTestDriver::new(
         r#"
         struct Foo {
             a: i64,
@@ -445,7 +476,9 @@ fn map_struct_rename_field1() {
             Foo { a, b, c }
         }
     "#,
-    );
+        |builder| builder,
+    )
+    .expect("Failed to build test driver");
 
     let runtime = driver.runtime();
     let runtime_ref = runtime.borrow();
@@ -458,6 +491,7 @@ fn map_struct_rename_field1() {
 
     driver.update(
         runtime_ref,
+        "mod.mun",
         r#"
         struct Foo {
             a: i64,
@@ -473,7 +507,7 @@ fn map_struct_rename_field1() {
 
 #[test]
 fn map_struct_rename_field2() {
-    let mut driver = TestDriver::new(
+    let mut driver = CompileAndRunTestDriver::new(
         r#"
         struct Foo {
             a: i64,
@@ -485,7 +519,9 @@ fn map_struct_rename_field2() {
             Foo { a, b, c }
         }
     "#,
-    );
+        |builder| builder,
+    )
+    .expect("Failed to build test driver");
 
     let runtime = driver.runtime();
     let runtime_ref = runtime.borrow();
@@ -498,6 +534,7 @@ fn map_struct_rename_field2() {
 
     driver.update(
         runtime_ref,
+        "mod.mun",
         r#"
         struct Foo {
             d: i64,
@@ -513,7 +550,7 @@ fn map_struct_rename_field2() {
 
 #[test]
 fn map_struct_all() {
-    let mut driver = TestDriver::new(
+    let mut driver = CompileAndRunTestDriver::new(
         r#"
         struct Foo {
             a: i32,
@@ -526,7 +563,9 @@ fn map_struct_all() {
             Foo { a, b, c, d }
         }
     "#,
-    );
+        |builder| builder,
+    )
+    .expect("Failed to build test driver");
 
     let runtime = driver.runtime();
     let runtime_ref = runtime.borrow();
@@ -540,6 +579,7 @@ fn map_struct_all() {
 
     driver.update(
         runtime_ref,
+        "mod.mun",
         r#"
         struct Foo {
             b: f64, // move
@@ -558,7 +598,7 @@ fn map_struct_all() {
 
 #[test]
 fn delete_used_struct() {
-    let mut driver = TestDriver::new(
+    let mut driver = CompileAndRunTestDriver::new(
         r#"
         struct Foo {
             a: i64,
@@ -570,7 +610,9 @@ fn delete_used_struct() {
             Foo { a, b, c }
         }
     "#,
-    );
+        |builder| builder,
+    )
+    .expect("Failed to build test driver");
 
     let runtime = driver.runtime();
     let runtime_ref = runtime.borrow();
@@ -583,6 +625,7 @@ fn delete_used_struct() {
 
     driver.update(
         runtime_ref,
+        "mod.mun",
         r#"
         struct Bar(i64);
 
@@ -609,7 +652,7 @@ fn delete_used_struct() {
 
 #[test]
 fn nested_structs() {
-    let mut driver = TestDriver::new(
+    let mut driver = CompileAndRunTestDriver::new(
         r#"
     struct(gc) GcStruct(f32, f32);
     struct(value) ValueStruct(f32, f32);
@@ -633,7 +676,9 @@ fn nested_structs() {
         ValueWrapper(a, b)
     }
     "#,
-    );
+        |builder| builder,
+    )
+    .expect("Failed to build test driver");
 
     let runtime = driver.runtime();
     let runtime_ref = runtime.borrow();
@@ -665,6 +710,7 @@ fn nested_structs() {
     // Tests mapping of `gc -> gc`, `value -> value`
     driver.update(
         runtime_ref,
+        "mod.mun",
         r#"
     struct(gc) GcStruct(f64, f64);
     struct(value) ValueStruct(f64, f64);
@@ -693,6 +739,7 @@ fn nested_structs() {
     // Tests an identity mapping
     driver.update(
         runtime.borrow(),
+        "mod.mun",
         r#"
     struct(gc) GcStruct(f64, f64);
     struct(value) ValueStruct(f64, f64);
@@ -726,6 +773,7 @@ fn nested_structs() {
     // Tests mapping of `gc -> value`, `value -> gc`
     driver.update(
         runtime.borrow(),
+        "mod.mun",
         r#"
     struct(value) GcStruct(f64, f64);
     struct(gc) ValueStruct(f64, f64);
@@ -751,6 +799,7 @@ fn nested_structs() {
     // retention of an old library (due to removal of `GcStruct` and `ValueStruct`)
     driver.update(
         runtime.borrow(),
+        "mod.mun",
         r#"
     struct(gc) GcStruct2(f64);
     struct(value) ValueStruct2(f64);
@@ -798,6 +847,7 @@ fn nested_structs() {
     // Tests mapping of different struct type, when `gc -> gc`, `value -> value`
     driver.update(
         runtime.borrow(),
+        "mod.mun",
         r#"
     struct(gc) GcStruct(f64, f64);
     struct(value) ValueStruct(f64, f64);
@@ -833,7 +883,7 @@ fn nested_structs() {
 
 #[test]
 fn insert_struct() {
-    let mut driver = TestDriver::new(
+    let mut driver = CompileAndRunTestDriver::new(
         r#"
         struct Foo {
             a: i64,
@@ -844,7 +894,9 @@ fn insert_struct() {
             Foo { a, c }
         }
     "#,
-    );
+        |builder| builder,
+    )
+    .expect("Failed to build test driver");
 
     let runtime = driver.runtime();
     let runtime_ref = runtime.borrow();
@@ -856,6 +908,7 @@ fn insert_struct() {
 
     driver.update(
         runtime_ref,
+        "mod.mun",
         r#"
         struct Bar(i64);
         struct(value) Baz(f64);

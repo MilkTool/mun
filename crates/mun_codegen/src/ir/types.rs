@@ -1,114 +1,109 @@
-use crate::value::{AsValue, IrValueContext, SizedValueType, TransparentValue, Value};
-use mun_codegen_macros::{AsValue, TestIsAbiCompatible};
+use crate::value::{
+    AsValue, BytesOrPtr, IrTypeContext, IrValueContext, SizedValueType, TransparentValue, Value,
+};
+use itertools::Itertools;
+use mun_codegen_macros::AsValue;
 
-impl TransparentValue for abi::Guid {
+impl<'ink> TransparentValue<'ink> for abi::Guid {
     type Target = [u8; 16];
 
-    fn as_target_value(&self, context: &IrValueContext) -> Value<Self::Target> {
-        self.b.as_value(context)
+    fn as_target_value(&self, context: &IrValueContext<'ink, '_, '_>) -> Value<'ink, Self::Target> {
+        self.0.as_value(context)
+    }
+
+    fn as_bytes_and_ptrs(&self, _: &IrTypeContext<'ink, '_>) -> Vec<BytesOrPtr<'ink>> {
+        vec![self.0.to_vec().into()]
     }
 }
 
-impl TransparentValue for abi::Privacy {
+impl<'ink> TransparentValue<'ink> for abi::Privacy {
     type Target = u8;
 
-    fn as_target_value(&self, context: &IrValueContext) -> Value<Self::Target> {
+    fn as_target_value(&self, context: &IrValueContext<'ink, '_, '_>) -> Value<'ink, Self::Target> {
         (*self as u8).as_value(context)
     }
-}
 
-impl TransparentValue for abi::TypeGroup {
-    type Target = u8;
-
-    fn as_target_value(&self, context: &IrValueContext) -> Value<Self::Target> {
-        (*self as u8).as_value(context)
+    fn as_bytes_and_ptrs(&self, _: &IrTypeContext<'ink, '_>) -> Vec<BytesOrPtr<'ink>> {
+        vec![vec![*self as u8].into()]
     }
 }
 
-impl TransparentValue for abi::StructMemoryKind {
+impl<'ink> TransparentValue<'ink> for abi::StructMemoryKind {
     type Target = u8;
 
-    fn as_target_value(&self, context: &IrValueContext) -> Value<Self::Target> {
+    fn as_target_value(&self, context: &IrValueContext<'ink, '_, '_>) -> Value<'ink, Self::Target> {
         (self.clone() as u8).as_value(context)
     }
+
+    fn as_bytes_and_ptrs(&self, _: &IrTypeContext<'ink, '_>) -> Vec<BytesOrPtr<'ink>> {
+        vec![vec![self.clone() as u8].into()]
+    }
 }
 
-#[derive(AsValue, TestIsAbiCompatible)]
-#[ir_name = "struct.MunTypeInfo"]
-#[abi_type(abi::TypeInfo)]
-pub struct TypeInfo {
+#[derive(AsValue)]
+pub struct TypeInfo<'ink> {
     pub guid: abi::Guid,
-    pub name: Value<*const u8>,
+    pub name: Value<'ink, *const u8>,
     pub size_in_bits: u32,
     pub alignment: u8,
-    pub group: abi::TypeGroup,
+    pub data: TypeInfoData<'ink>,
 }
 
-#[derive(AsValue, TestIsAbiCompatible)]
-#[ir_name = "struct.MunFunctionSignature"]
-#[abi_type(abi::FunctionSignature)]
-pub struct FunctionSignature {
-    pub arg_types: Value<*const *const TypeInfo>,
-    pub return_type: Value<*const TypeInfo>,
+#[derive(AsValue)]
+#[repr(u8)]
+pub enum TypeInfoData<'ink> {
+    Primitive,
+    Struct(StructInfo<'ink>),
+}
+
+#[derive(AsValue)]
+pub struct FunctionSignature<'ink> {
+    pub arg_types: Value<'ink, *const *const TypeInfo<'ink>>,
+    pub return_type: Value<'ink, *const TypeInfo<'ink>>,
     pub num_arg_types: u16,
 }
 
-#[derive(AsValue, TestIsAbiCompatible)]
-#[ir_name = "struct.MunFunctionPrototype"]
-#[abi_type(abi::FunctionPrototype)]
-pub struct FunctionPrototype {
-    pub name: Value<*const u8>,
-    pub signature: FunctionSignature,
+#[derive(AsValue)]
+pub struct FunctionPrototype<'ink> {
+    pub name: Value<'ink, *const u8>,
+    pub signature: FunctionSignature<'ink>,
 }
 
-#[derive(AsValue, TestIsAbiCompatible)]
-#[ir_name = "struct.MunFunctionDefinition"]
-#[abi_type(abi::FunctionDefinition)]
-pub struct FunctionDefinition {
-    pub prototype: FunctionPrototype,
-    pub fn_ptr: Value<*const fn()>,
+#[derive(AsValue)]
+pub struct FunctionDefinition<'ink> {
+    pub prototype: FunctionPrototype<'ink>,
+    pub fn_ptr: Value<'ink, *const fn()>,
 }
 
-#[derive(AsValue, TestIsAbiCompatible)]
-#[ir_name = "struct.MunStructInfo"]
-#[abi_type(abi::StructInfo)]
-pub struct StructInfo {
-    pub field_names: Value<*const *const u8>,
-    pub field_types: Value<*const *const TypeInfo>,
-    pub field_offsets: Value<*const u16>,
+#[derive(AsValue)]
+pub struct StructInfo<'ink> {
+    pub field_names: Value<'ink, *const *const u8>,
+    pub field_types: Value<'ink, *const *const TypeInfo<'ink>>,
+    pub field_offsets: Value<'ink, *const u16>,
     pub num_fields: u16,
     pub memory_kind: abi::StructMemoryKind,
 }
 
-#[derive(AsValue, TestIsAbiCompatible)]
-#[ir_name = "struct.MunModuleInfo"]
-#[abi_type(abi::ModuleInfo)]
-pub struct ModuleInfo {
-    pub path: Value<*const u8>,
-    pub functions: Value<*const FunctionDefinition>,
+#[derive(AsValue)]
+pub struct ModuleInfo<'ink> {
+    pub path: Value<'ink, *const u8>,
+    pub functions: Value<'ink, *const FunctionDefinition<'ink>>,
+    pub types: Value<'ink, *const *const TypeInfo<'ink>>,
     pub num_functions: u32,
-    pub types: Value<*const *const TypeInfo>,
     pub num_types: u32,
 }
 
-#[derive(AsValue, TestIsAbiCompatible)]
-#[ir_name = "struct.MunDispatchTable"]
-#[abi_type(abi::DispatchTable)]
-pub struct DispatchTable {
-    pub prototypes: Value<*const FunctionPrototype>,
-    pub fn_ptrs: Value<*mut *const fn()>,
+#[derive(AsValue)]
+pub struct DispatchTable<'ink> {
+    pub prototypes: Value<'ink, *const FunctionPrototype<'ink>>,
+    pub fn_ptrs: Value<'ink, *mut *const fn()>,
     pub num_entries: u32,
 }
 
-#[derive(AsValue, TestIsAbiCompatible)]
-#[ir_name = "struct.MunAssemblyInfo"]
-#[abi_type(abi::AssemblyInfo)]
-pub struct AssemblyInfo {
-    pub symbols: ModuleInfo,
-    pub dispatch_table: DispatchTable,
-    pub dependencies: Value<*const *const u8>,
+#[derive(AsValue)]
+pub struct AssemblyInfo<'ink> {
+    pub symbols: ModuleInfo<'ink>,
+    pub dispatch_table: DispatchTable<'ink>,
+    pub dependencies: Value<'ink, *const *const u8>,
     pub num_dependencies: u32,
 }
-
-#[cfg(test)]
-mod test;

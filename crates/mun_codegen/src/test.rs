@@ -1,11 +1,51 @@
-use crate::{mock::MockDatabase, IrDatabase, ModuleBuilder};
-use hir::{
-    diagnostics::DiagnosticSink, line_index::LineIndex, HirDatabase, Module, SourceDatabase,
+use crate::{
+    code_gen::{AssemblyBuilder, CodeGenContext},
+    ir::file::gen_file_ir,
+    ir::file_group::gen_file_group_ir,
+    mock::MockDatabase,
+    CodeGenDatabase,
 };
-use inkwell::OptimizationLevel;
+use hir::{
+    diagnostics::DiagnosticSink, with_fixture::WithFixture, HirDatabase, SourceDatabase, Upcast,
+};
+use inkwell::{context::Context, OptimizationLevel};
+use itertools::Itertools;
 use mun_target::spec::Target;
 use std::cell::RefCell;
-use std::sync::Arc;
+
+#[test]
+fn multi_file() {
+    test_snapshot(
+        r"
+    //- /mod.mun
+    pub fn main() -> i32 {
+        foo::get_value()
+    }
+
+    //- /foo.mun
+    pub(super) fn get_value() -> i32 {
+        3
+    }
+    ",
+    )
+}
+
+#[test]
+fn issue_262() {
+    test_snapshot(
+        r"
+    fn foo() -> i32 {
+        let bar = {
+            let b = 3;
+            return b + 3;
+        };
+
+        // This code will never be executed
+        let a = 3 + 4;
+        a
+    }",
+    )
+}
 
 #[test]
 fn issue_225() {
@@ -784,34 +824,47 @@ fn incremental_compilation() {
         }
         "#,
     );
-    db.set_optimization_lvl(OptimizationLevel::Default);
+    db.set_optimization_level(OptimizationLevel::Default);
     db.set_target(Target::host_target().unwrap());
+
+    let module_group_id = db
+        .module_partition()
+        .group_for_file(file_id)
+        .expect("could not find ModuleGroupId for file");
 
     {
         let events = db.log_executed(|| {
-            db.file_ir(file_id);
+            db.target_assembly(module_group_id);
         });
         assert!(
-            format!("{:?}", events).contains("group_ir"),
+            format!("{:?}", events).contains("package_defs"),
             "{:#?}",
             events
         );
-        assert!(format!("{:?}", events).contains("file_ir"), "{:#?}", events);
+        assert!(
+            format!("{:?}", events).contains("assembly"),
+            "{:#?}",
+            events
+        );
     }
 
-    db.set_optimization_lvl(OptimizationLevel::Aggressive);
+    db.set_optimization_level(OptimizationLevel::Aggressive);
 
     {
         let events = db.log_executed(|| {
-            db.file_ir(file_id);
+            db.target_assembly(module_group_id);
         });
         println!("events: {:?}", events);
         assert!(
-            !format!("{:?}", events).contains("group_ir"),
+            !format!("{:?}", events).contains("package_defs"),
             "{:#?}",
             events
         );
-        assert!(format!("{:?}", events).contains("file_ir"), "{:#?}", events);
+        assert!(
+            format!("{:?}", events).contains("assembly"),
+            "{:#?}",
+            events
+        );
     }
 
     // TODO: Try to disconnect `group_ir` and `file_ir`
@@ -924,29 +977,40 @@ fn test_snapshot_unoptimized(text: &str) {
 }
 
 fn test_snapshot_with_optimization(text: &str, opt: OptimizationLevel) {
-    let text = text.trim().replace("\n    ", "\n");
-
-    let (mut db, file_id) = MockDatabase::with_single_file(&text);
-    db.set_optimization_lvl(opt);
+    let mut db = MockDatabase::with_files(&text);
+    db.set_optimization_level(opt);
     db.set_target(Target::host_target().unwrap());
 
-    let line_index: Arc<LineIndex> = db.line_index(file_id);
+    // Build and extra diagnostics
     let messages = RefCell::new(Vec::new());
     let mut sink = DiagnosticSink::new(|diag| {
+        let file_id = diag.source().file_id;
+        let line_index = db.line_index(file_id);
+        let source_root_id = db.file_source_root(file_id);
+        let source_root = db.source_root(source_root_id);
+        let relative_path = source_root.relative_path(file_id);
         let line_col = line_index.line_col(diag.highlight_range().start());
         messages.borrow_mut().push(format!(
-            "error {}:{}: {}",
+            "{} ({}:{}): error: {}",
+            relative_path,
             line_col.line + 1,
-            line_col.col + 1,
+            line_col.col_utf16 + 1,
             diag.message()
         ));
     });
-    Module::from(file_id).diagnostics(&db, &mut sink);
+    for module in hir::Package::all(db.upcast())
+        .into_iter()
+        .flat_map(|package| package.modules(db.upcast()))
+    {
+        module.diagnostics(db.upcast(), &mut sink);
+    }
     drop(sink);
     let messages = messages.into_inner();
 
-    let module_builder =
-        ModuleBuilder::new(&db, file_id).expect("Failed to initialize module builder");
+    // Setup code generation
+    let llvm_context = Context::create();
+    let code_gen = CodeGenContext::new(&llvm_context, db.upcast());
+    let module_parition = db.module_partition();
 
     // The thread is named after the test case, so we can use it to name our snapshots.
     let thread_name = std::thread::current()
@@ -954,42 +1018,32 @@ fn test_snapshot_with_optimization(text: &str, opt: OptimizationLevel) {
         .expect("The current thread does not have a name.")
         .replace("test::", "");
 
-    let group_ir_value = if !messages.is_empty() {
-        "".to_owned()
+    let value = if messages.is_empty() {
+        module_parition.iter().map(|(module_group_id, module_group)| {
+            let group_ir = gen_file_group_ir(&code_gen, &module_group);
+            let file_ir = gen_file_ir(&code_gen, &group_ir, &module_group);
+
+            let group_ir = group_ir.llvm_module.print_to_string().to_string();
+            let file_ir = file_ir.llvm_module.print_to_string().to_string();
+
+            // To ensure that we test symbol generation
+            let module_builder = AssemblyBuilder::new(&code_gen, &module_parition, module_group_id);
+            let _obj_file = module_builder.build().expect("Failed to build object file");
+
+            format!(
+                "; == FILE IR ({}) =====================================\n{}\n; == GROUP IR ({}) ====================================\n{}",
+                module_group.relative_file_path(),
+                file_ir,
+                module_group.relative_file_path(),
+                group_ir
+            )
+        }).intersperse(String::from("\n")).collect::<String>()
     } else {
-        format!(
-            "{}",
-            db.group_ir(file_id)
-                .llvm_module
-                .print_to_string()
-                .to_string()
-        )
+        messages
+            .into_iter()
+            .intersperse(String::from("\n"))
+            .collect::<String>()
     };
 
-    let file_ir_value = if !messages.is_empty() {
-        messages.join("\n")
-    } else {
-        format!(
-            "{}",
-            db.file_ir(file_id)
-                .llvm_module
-                .print_to_string()
-                .to_string()
-        )
-    };
-
-    // To ensure that we test symbol generation
-    if messages.is_empty() {
-        let _obj_file = module_builder.build().expect("Failed to build object file");
-    }
-
-    let value = format!(
-        r"; == FILE IR =====================================
-{}
-
-; == GROUP IR ====================================
-{}",
-        file_ir_value, group_ir_value
-    );
     insta::assert_snapshot!(thread_name, value, &text);
 }

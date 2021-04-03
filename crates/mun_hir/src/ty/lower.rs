@@ -1,15 +1,17 @@
 pub(crate) use self::diagnostics::LowerDiagnostic;
-use crate::adt::StructKind;
-use crate::arena::map::ArenaMap;
-use crate::builtin_type::BuiltinType;
-use crate::diagnostics::DiagnosticSink;
-use crate::name_resolution::Namespace;
-use crate::resolve::{Resolution, Resolver};
-use crate::ty::{FnSig, Ty, TypeCtor};
-use crate::type_ref::{TypeRef, TypeRefId, TypeRefMap, TypeRefSourceMap};
-use crate::{FileId, Function, HirDatabase, ModuleDef, Path, Struct};
-use std::ops::Index;
-use std::sync::Arc;
+use crate::resolve::{HasResolver, TypeNs};
+use crate::{
+    arena::map::ArenaMap,
+    code_model::StructKind,
+    diagnostics::DiagnosticSink,
+    name_resolution::Namespace,
+    primitive_type::PrimitiveType,
+    resolve::Resolver,
+    ty::{FnSig, Ty, TypeCtor},
+    type_ref::{LocalTypeRefId, TypeRef, TypeRefMap, TypeRefSourceMap},
+    FileId, Function, HirDatabase, ModuleDef, Path, Struct, TypeAlias,
+};
+use std::{ops::Index, sync::Arc};
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub(crate) struct LowerResult {
@@ -19,13 +21,13 @@ pub(crate) struct LowerResult {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LowerBatchResult {
-    pub(crate) type_ref_to_type: ArenaMap<TypeRefId, Ty>,
+    pub(crate) type_ref_to_type: ArenaMap<LocalTypeRefId, Ty>,
     pub(crate) diagnostics: Vec<LowerDiagnostic>,
 }
 
-impl Index<TypeRefId> for LowerBatchResult {
+impl Index<LocalTypeRefId> for LowerBatchResult {
     type Output = Ty;
-    fn index(&self, expr: TypeRefId) -> &Ty {
+    fn index(&self, expr: LocalTypeRefId) -> &Ty {
         self.type_ref_to_type.get(expr).unwrap_or(&Ty::Unknown)
     }
 }
@@ -50,7 +52,7 @@ impl Ty {
         db: &dyn HirDatabase,
         resolver: &Resolver,
         type_ref_map: &TypeRefMap,
-        type_ref: TypeRefId,
+        type_ref: LocalTypeRefId,
     ) -> LowerResult {
         let mut diagnostics = Vec::new();
         let ty =
@@ -63,15 +65,18 @@ impl Ty {
         resolver: &Resolver,
         type_ref_map: &TypeRefMap,
         diagnostics: &mut Vec<LowerDiagnostic>,
-        type_ref: TypeRefId,
+        type_ref: LocalTypeRefId,
     ) -> Ty {
         let res = match &type_ref_map[type_ref] {
-            TypeRef::Path(path) => Ty::from_hir_path(db, resolver, path),
-            TypeRef::Error => Some(Ty::Unknown),
-            TypeRef::Empty => Some(Ty::Empty),
-            TypeRef::Never => Some(Ty::simple(TypeCtor::Never)),
+            TypeRef::Path(path) => Ty::from_hir_path(db, resolver, type_ref, path, diagnostics),
+            TypeRef::Error => Some((Ty::Unknown, false)),
+            TypeRef::Empty => Some((Ty::Empty, false)),
+            TypeRef::Never => Some((Ty::simple(TypeCtor::Never), false)),
         };
-        if let Some(ty) = res {
+        if let Some((ty, is_cyclic)) = res {
+            if is_cyclic {
+                diagnostics.push(LowerDiagnostic::CyclicType { id: type_ref })
+            }
             ty
         } else {
             diagnostics.push(LowerDiagnostic::UnresolvedType { id: type_ref });
@@ -79,31 +84,31 @@ impl Ty {
         }
     }
 
-    pub(crate) fn from_hir_path(
+    fn from_hir_path(
         db: &dyn HirDatabase,
         resolver: &Resolver,
+        type_ref: LocalTypeRefId,
         path: &Path,
-    ) -> Option<Self> {
-        let resolution = resolver
-            .resolve_path_without_assoc_items(db, path)
-            .take_types();
+        diagnostics: &mut Vec<LowerDiagnostic>,
+    ) -> Option<(Self, bool)> {
+        // Find the type
+        let (ty, vis) = resolver.resolve_path_as_type_fully(db.upcast(), path)?;
 
-        let def = match resolution {
-            Some(Resolution::Def(def)) => def,
-            Some(Resolution::LocalBinding(..)) => {
-                // this should never happen
-                panic!("path resolved to local binding in type ns");
+        // Get the definition and visibility
+        let def = match ty {
+            TypeNs::StructId(id) => TypableDef::Struct(id.into()),
+            TypeNs::TypeAliasId(id) => TypableDef::TypeAlias(id.into()),
+            TypeNs::PrimitiveType(id) => TypableDef::PrimitiveType(id),
+        };
+
+        // Get the current module and see if the type is visible from here
+        if let Some(module) = resolver.module() {
+            if !vis.is_visible_from(db, module) {
+                diagnostics.push(LowerDiagnostic::TypeIsPrivate { id: type_ref })
             }
-            None => return None,
-        };
+        }
 
-        let typable: TypableDef = match def.into() {
-            None => return None,
-            Some(it) => it,
-        };
-
-        let ty = db.type_for_def(typable, Namespace::Types);
-        Some(ty)
+        Some(db.type_for_def(def, Namespace::Types))
     }
 }
 
@@ -126,14 +131,20 @@ pub fn types_from_hir(
 
 pub fn lower_struct_query(db: &dyn HirDatabase, s: Struct) -> Arc<LowerBatchResult> {
     let data = s.data(db.upcast());
-    types_from_hir(db, &s.resolver(db), data.type_ref_map())
+    types_from_hir(db, &s.id.resolver(db.upcast()), data.type_ref_map())
+}
+
+pub fn lower_type_alias_query(db: &dyn HirDatabase, t: TypeAlias) -> Arc<LowerBatchResult> {
+    let data = t.data(db.upcast());
+    types_from_hir(db, &t.id.resolver(db.upcast()), data.type_ref_map())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum TypableDef {
     Function(Function),
-    BuiltinType(BuiltinType),
+    PrimitiveType(PrimitiveType),
     Struct(Struct),
+    TypeAlias(TypeAlias),
 }
 
 impl From<Function> for TypableDef {
@@ -142,9 +153,9 @@ impl From<Function> for TypableDef {
     }
 }
 
-impl From<BuiltinType> for TypableDef {
-    fn from(f: BuiltinType) -> Self {
-        TypableDef::BuiltinType(f)
+impl From<PrimitiveType> for TypableDef {
+    fn from(f: PrimitiveType) -> Self {
+        TypableDef::PrimitiveType(f)
     }
 }
 
@@ -158,8 +169,10 @@ impl From<ModuleDef> for Option<TypableDef> {
     fn from(d: ModuleDef) -> Self {
         match d {
             ModuleDef::Function(f) => Some(TypableDef::Function(f)),
-            ModuleDef::BuiltinType(t) => Some(TypableDef::BuiltinType(t)),
+            ModuleDef::PrimitiveType(t) => Some(TypableDef::PrimitiveType(t)),
             ModuleDef::Struct(t) => Some(TypableDef::Struct(t)),
+            ModuleDef::TypeAlias(t) => Some(TypableDef::TypeAlias(t)),
+            ModuleDef::Module(_) => None,
         }
     }
 }
@@ -173,17 +186,11 @@ impl_froms!(CallableDef: Function, Struct);
 
 impl CallableDef {
     pub fn is_function(self) -> bool {
-        match self {
-            CallableDef::Function(_) => true,
-            _ => false,
-        }
+        matches!(self, CallableDef::Function(_))
     }
 
     pub fn is_struct(self) -> bool {
-        match self {
-            CallableDef::Struct(_) => true,
-            _ => false,
-        }
+        matches!(self, CallableDef::Struct(_))
     }
 }
 
@@ -191,25 +198,38 @@ impl CallableDef {
 /// `struct Foo(usize)`, we have two types: The type of the struct itself, and
 /// the constructor function `(usize) -> Foo` which lives in the values
 /// namespace.
-pub(crate) fn type_for_def(db: &dyn HirDatabase, def: TypableDef, ns: Namespace) -> Ty {
-    match (def, ns) {
+pub(crate) fn type_for_def(db: &dyn HirDatabase, def: TypableDef, ns: Namespace) -> (Ty, bool) {
+    let ty = match (def, ns) {
         (TypableDef::Function(f), Namespace::Values) => type_for_fn(db, f),
-        (TypableDef::BuiltinType(t), Namespace::Types) => type_for_builtin(t),
+        (TypableDef::PrimitiveType(t), Namespace::Types) => type_for_primitive(t),
         (TypableDef::Struct(s), Namespace::Values) => type_for_struct_constructor(db, s),
         (TypableDef::Struct(s), Namespace::Types) => type_for_struct(db, s),
+        (TypableDef::TypeAlias(t), Namespace::Types) => type_for_type_alias(db, t),
 
         // 'error' cases:
         (TypableDef::Function(_), Namespace::Types) => Ty::Unknown,
-        (TypableDef::BuiltinType(_), Namespace::Values) => Ty::Unknown,
-    }
+        (TypableDef::PrimitiveType(_), Namespace::Values) => Ty::Unknown,
+        (TypableDef::TypeAlias(_), Namespace::Values) => Ty::Unknown,
+    };
+    (ty, false)
+}
+
+/// Recover with an unknown type when a cycle is detected in the salsa database.
+pub(crate) fn type_for_cycle_recover(
+    _db: &dyn HirDatabase,
+    _cycle: &[String],
+    _def: &TypableDef,
+    _ns: &Namespace,
+) -> (Ty, bool) {
+    (Ty::Unknown, true)
 }
 
 /// Build the declared type of a static.
-fn type_for_builtin(def: BuiltinType) -> Ty {
+fn type_for_primitive(def: PrimitiveType) -> Ty {
     Ty::simple(match def {
-        BuiltinType::Float(f) => TypeCtor::Float(f.into()),
-        BuiltinType::Int(i) => TypeCtor::Int(i.into()),
-        BuiltinType::Bool => TypeCtor::Bool,
+        PrimitiveType::Float(f) => TypeCtor::Float(f.into()),
+        PrimitiveType::Int(i) => TypeCtor::Int(i.into()),
+        PrimitiveType::Bool => TypeCtor::Bool,
     })
 }
 
@@ -227,8 +247,8 @@ pub(crate) fn callable_item_sig(db: &dyn HirDatabase, def: CallableDef) -> FnSig
 }
 
 pub(crate) fn fn_sig_for_fn(db: &dyn HirDatabase, def: Function) -> FnSig {
-    let data = def.data(db);
-    let resolver = def.resolver(db);
+    let data = def.data(db.upcast());
+    let resolver = def.id.resolver(db.upcast());
     let params = data
         .params()
         .iter()
@@ -240,7 +260,7 @@ pub(crate) fn fn_sig_for_fn(db: &dyn HirDatabase, def: Function) -> FnSig {
 
 pub(crate) fn fn_sig_for_struct_constructor(db: &dyn HirDatabase, def: Struct) -> FnSig {
     let data = def.data(db.upcast());
-    let resolver = def.resolver(db);
+    let resolver = def.id.resolver(db.upcast());
     let params = data
         .fields
         .iter()
@@ -264,17 +284,26 @@ fn type_for_struct(_db: &dyn HirDatabase, def: Struct) -> Ty {
     Ty::simple(TypeCtor::Struct(def))
 }
 
+fn type_for_type_alias(db: &dyn HirDatabase, def: TypeAlias) -> Ty {
+    let data = def.data(db.upcast());
+    let resolver = def.id.resolver(db.upcast());
+    let type_ref = def.type_ref(db);
+    Ty::from_hir(db, &resolver, data.type_ref_map(), type_ref).ty
+}
+
 pub mod diagnostics {
-    use crate::diagnostics::UnresolvedType;
+    use crate::diagnostics::{CyclicType, PrivateAccess, UnresolvedType};
     use crate::{
         diagnostics::DiagnosticSink,
-        type_ref::{TypeRefId, TypeRefSourceMap},
+        type_ref::{LocalTypeRefId, TypeRefSourceMap},
         FileId, HirDatabase,
     };
 
     #[derive(Debug, PartialEq, Eq, Clone)]
     pub(crate) enum LowerDiagnostic {
-        UnresolvedType { id: TypeRefId },
+        UnresolvedType { id: LocalTypeRefId },
+        TypeIsPrivate { id: LocalTypeRefId },
+        CyclicType { id: LocalTypeRefId },
     }
 
     impl LowerDiagnostic {
@@ -289,6 +318,14 @@ pub mod diagnostics {
                 LowerDiagnostic::UnresolvedType { id } => sink.push(UnresolvedType {
                     file: file_id,
                     type_ref: source_map.type_ref_syntax(*id).unwrap(),
+                }),
+                LowerDiagnostic::CyclicType { id } => sink.push(CyclicType {
+                    file: file_id,
+                    type_ref: source_map.type_ref_syntax(*id).unwrap(),
+                }),
+                LowerDiagnostic::TypeIsPrivate { id } => sink.push(PrivateAccess {
+                    file: file_id,
+                    expr: source_map.type_ref_syntax(*id).unwrap().syntax_node_ptr(),
                 }),
             }
         }

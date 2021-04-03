@@ -65,7 +65,10 @@ impl IsAbiCompatible<*const ::std::os::raw::c_char> for *const u8 {}
 impl IsAbiCompatible<*const ::std::os::raw::c_void> for *const fn() {}
 impl<S, T: IsAbiCompatible<S>> IsAbiCompatible<*const S> for *const T {}
 impl<S, T: IsAbiCompatible<S>> IsAbiCompatible<*mut S> for *mut T {}
-impl<S, T: ConcreteValueType> IsAbiCompatible<S> for Value<T> where T: IsAbiCompatible<S> {}
+impl<'ink, S, T: ConcreteValueType<'ink>> IsAbiCompatible<S> for Value<'ink, T> where
+    T: IsAbiCompatible<S>
+{
+}
 
 #[test]
 #[cfg(test)]

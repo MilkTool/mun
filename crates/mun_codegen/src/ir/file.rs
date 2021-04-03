@@ -1,61 +1,59 @@
 use super::body::ExternalGlobals;
-use crate::ir::{function, type_table::TypeTable};
-use crate::value::Global;
-use crate::{CodeGenParams, IrDatabase};
-use hir::{FileId, ModuleDef};
+use crate::module_group::ModuleGroup;
+use crate::{
+    code_gen::CodeGenContext,
+    ir::body::BodyIrGenerator,
+    ir::file_group::FileGroupIR,
+    ir::{function, type_table::TypeTable},
+    value::Global,
+};
+use hir::{HasVisibility, ModuleDef};
 use inkwell::module::Module;
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::sync::Arc;
 
 /// The IR generated for a single source file.
 #[derive(Debug, Clone, Eq, PartialEq)]
-pub struct FileIR {
-    /// The original source file
-    pub file_id: FileId,
+pub struct FileIR<'ink> {
     /// The LLVM module that contains the IR
-    pub llvm_module: Module,
+    pub llvm_module: Module<'ink>,
     /// The `hir::Function`s that constitute the file's API.
     pub api: HashSet<hir::Function>,
 }
 
 /// Generates IR for the specified file.
-pub(crate) fn ir_query(db: &dyn IrDatabase, file_id: FileId) -> Arc<FileIR> {
-    let llvm_module = db
-        .context()
-        .create_module(db.file_relative_path(file_id).as_str());
+pub(crate) fn gen_file_ir<'db, 'ink>(
+    code_gen: &CodeGenContext<'db, 'ink>,
+    group_ir: &FileGroupIR<'ink>,
+    module_group: &ModuleGroup,
+) -> FileIR<'ink> {
+    let llvm_module = code_gen.context.create_module(&module_group.name);
 
-    let group_ir = db.group_ir(file_id);
+    let hir_types = &code_gen.hir_types;
 
     // Generate all exposed function and wrapper function signatures.
     // Use a `BTreeMap` to guarantee deterministically ordered output.ures
     let mut functions = HashMap::new();
     let mut wrapper_functions = BTreeMap::new();
-    for def in db.module_data(file_id).definitions() {
+    for def in module_group
+        .iter()
+        .flat_map(|module| module.declarations(code_gen.db))
+    {
         if let ModuleDef::Function(f) = def {
-            if !f.is_extern(db.upcast()) {
-                let fun = function::gen_signature(
-                    db,
-                    *f,
-                    &llvm_module,
-                    CodeGenParams {
-                        make_marshallable: false,
-                    },
-                );
-                functions.insert(*f, fun);
+            if !f.is_extern(code_gen.db) {
+                let fun = function::gen_prototype(code_gen.db, hir_types, f, &llvm_module);
+                functions.insert(f, fun);
 
-                let fn_sig = f.ty(db.upcast()).callable_sig(db.upcast()).unwrap();
-                if !f.data(db.upcast()).visibility().is_private()
-                    && !fn_sig.marshallable(db.upcast())
+                let fn_sig = f.ty(code_gen.db).callable_sig(code_gen.db).unwrap();
+                if f.visibility(code_gen.db).is_externally_visible()
+                    && !fn_sig.marshallable(code_gen.db)
                 {
-                    let wrapper_fun = function::gen_signature(
-                        db,
-                        *f,
+                    let wrapper_fun = function::gen_public_prototype(
+                        code_gen.db,
+                        &code_gen.hir_types,
+                        f,
                         &llvm_module,
-                        CodeGenParams {
-                            make_marshallable: true,
-                        },
                     );
-                    wrapper_functions.insert(*f, wrapper_fun);
+                    wrapper_functions.insert(f, wrapper_fun);
                 }
             }
         }
@@ -82,43 +80,49 @@ pub(crate) fn ir_query(db: &dyn IrDatabase, file_id: FileId) -> Arc<FileIR> {
     };
 
     // Construct requirements for generating the bodies
-    let fn_pass_manager = function::create_pass_manager(&llvm_module, db.optimization_lvl());
+    let fn_pass_manager = function::create_pass_manager(&llvm_module, code_gen.optimization_level);
 
     // Generate the function bodies
     for (hir_function, llvm_function) in functions.iter() {
-        function::gen_body(
-            db,
+        let mut code_gen = BodyIrGenerator::new(
+            code_gen.context,
+            code_gen.db,
             (*hir_function, *llvm_function),
             &functions,
             &group_ir.dispatch_table,
             &group_ir.type_table,
             external_globals.clone(),
+            &code_gen.hir_types,
+            &module_group,
         );
+
+        code_gen.gen_fn_body();
         fn_pass_manager.run_on(llvm_function);
     }
 
     for (hir_function, llvm_function) in wrapper_functions.iter() {
-        function::gen_wrapper_body(
-            db,
+        let mut code_gen = BodyIrGenerator::new(
+            code_gen.context,
+            code_gen.db,
             (*hir_function, *llvm_function),
             &functions,
             &group_ir.dispatch_table,
             &group_ir.type_table,
             external_globals.clone(),
+            &code_gen.hir_types,
+            &module_group,
         );
+
+        code_gen.gen_fn_wrapper();
         fn_pass_manager.run_on(llvm_function);
     }
 
     // Filter private methods
     let api: HashSet<hir::Function> = functions
         .keys()
-        .filter(|f| f.visibility(db.upcast()) != hir::Visibility::Private)
-        .cloned()
+        .copied()
+        .filter(|&f| module_group.should_export_fn(code_gen.db, f))
         .collect();
 
-    Arc::new(FileIR {
-        file_id,
-        llvm_module,
-        api,
-    })
+    FileIR { llvm_module, api }
 }

@@ -1,14 +1,14 @@
 use crate::{
     arena::map::ArenaMap,
-    arena::{Arena, RawId},
+    arena::{Arena, Idx},
     code_model::DefWithBody,
-    FileId, HirDatabase, Name, Path,
+    DefDatabase, FileId, HirDatabase, Name, Path,
 };
 
 //pub use mun_syntax::ast::PrefixOp as UnaryOp;
 use crate::code_model::src::HasSource;
 use crate::name::AsName;
-use crate::type_ref::{TypeRef, TypeRefBuilder, TypeRefId, TypeRefMap, TypeRefSourceMap};
+use crate::type_ref::{LocalTypeRefId, TypeRef, TypeRefBuilder, TypeRefMap, TypeRefSourceMap};
 use either::Either;
 pub use mun_syntax::ast::PrefixOp as UnaryOp;
 use mun_syntax::ast::{ArgListOwner, BinOp, LoopBodyOwner, NameOwner, TypeAscriptionOwner};
@@ -18,23 +18,18 @@ use std::ops::Index;
 use std::sync::Arc;
 
 pub use self::scope::ExprScopes;
-use crate::builtin_type::{BuiltinFloat, BuiltinInt};
 use crate::diagnostics::DiagnosticSink;
+use crate::ids::{DefWithBodyId, Lookup};
 use crate::in_file::InFile;
-use crate::resolve::Resolver;
+use crate::primitive_type::{PrimitiveFloat, PrimitiveInt};
 use std::borrow::Cow;
 use std::str::FromStr;
 
 pub(crate) mod scope;
 pub(crate) mod validator;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct ExprId(RawId);
-impl_arena_id!(ExprId);
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct PatId(RawId);
-impl_arena_id!(PatId);
+pub type ExprId = Idx<Expr>;
+pub type PatId = Idx<Pat>;
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum ExprDiagnostic {
@@ -44,26 +39,49 @@ pub enum ExprDiagnostic {
 /// The body of an item (function, const etc.).
 #[derive(Debug, Eq, PartialEq)]
 pub struct Body {
-    owner: DefWithBody,
-    exprs: Arena<ExprId, Expr>,
-    pats: Arena<PatId, Pat>,
+    owner: DefWithBodyId,
+    exprs: Arena<Expr>,
+    pats: Arena<Pat>,
     type_refs: TypeRefMap,
     /// The patterns for the function's parameters. While the parameter types are part of the
     /// function signature, the patterns are not (they don't change the external type of the
     /// function).
     ///
     /// If this `Body` is for the body of a constant, this will just be empty.
-    params: Vec<(PatId, TypeRefId)>,
+    params: Vec<(PatId, LocalTypeRefId)>,
     /// The `ExprId` of the actual body expression.
     body_expr: ExprId,
-    ret_type: TypeRefId,
+    ret_type: LocalTypeRefId,
 
     /// Diagnostics encountered when parsing the ast expressions
     diagnostics: Vec<ExprDiagnostic>,
 }
 
 impl Body {
-    pub fn params(&self) -> &[(PatId, TypeRefId)] {
+    pub(crate) fn body_query(db: &dyn DefDatabase, def: DefWithBodyId) -> Arc<Body> {
+        db.body_with_source_map(def).0
+    }
+
+    pub(crate) fn body_with_source_map_query(
+        db: &dyn DefDatabase,
+        def: DefWithBodyId,
+    ) -> (Arc<Body>, Arc<BodySourceMap>) {
+        let mut collector;
+
+        match def {
+            DefWithBodyId::FunctionId(f) => {
+                let f = f.lookup(db);
+                let src = f.source(db);
+                collector = ExprCollector::new(def, src.file_id, db);
+                collector.collect_fn_body(&src.value)
+            }
+        }
+
+        let (body, source_map) = collector.finish();
+        (Arc::new(body), Arc::new(source_map))
+    }
+
+    pub fn params(&self) -> &[(PatId, LocalTypeRefId)] {
         &self.params
     }
 
@@ -71,7 +89,7 @@ impl Body {
         self.body_expr
     }
 
-    pub fn owner(&self) -> DefWithBody {
+    pub fn owner(&self) -> DefWithBodyId {
         self.owner
     }
 
@@ -87,7 +105,7 @@ impl Body {
         &self.type_refs
     }
 
-    pub fn ret_type(&self) -> TypeRefId {
+    pub fn ret_type(&self) -> LocalTypeRefId {
         self.ret_type
     }
 
@@ -120,10 +138,10 @@ impl Index<PatId> for Body {
     }
 }
 
-impl Index<TypeRefId> for Body {
+impl Index<LocalTypeRefId> for Body {
     type Output = TypeRef;
 
-    fn index(&self, type_ref: TypeRefId) -> &TypeRef {
+    fn index(&self, type_ref: LocalTypeRefId) -> &TypeRef {
         &self.type_refs[type_ref]
     }
 }
@@ -155,7 +173,7 @@ impl BodySourceMap {
         self.expr_map_back.get(expr).cloned()
     }
 
-    pub fn type_ref_syntax(&self, type_ref: TypeRefId) -> Option<AstPtr<ast::TypeRef>> {
+    pub fn type_ref_syntax(&self, type_ref: LocalTypeRefId) -> Option<AstPtr<ast::TypeRef>> {
         self.type_refs.type_ref_syntax(type_ref)
     }
 
@@ -194,7 +212,7 @@ pub struct RecordLitField {
 pub enum Statement {
     Let {
         pat: PatId,
-        type_ref: Option<TypeRefId>,
+        type_ref: Option<LocalTypeRefId>,
         initializer: Option<ExprId>,
     },
     Expr(ExprId),
@@ -234,7 +252,7 @@ pub struct LiteralInt {
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum LiteralIntKind {
-    Suffixed(BuiltinInt),
+    Suffixed(PrimitiveInt),
     Unsuffixed,
 }
 
@@ -246,7 +264,7 @@ pub struct LiteralFloat {
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub enum LiteralFloatKind {
-    Suffixed(BuiltinFloat),
+    Suffixed(PrimitiveFloat),
     Unsuffixed,
 }
 
@@ -293,7 +311,7 @@ pub enum Expr {
         body: ExprId,
     },
     RecordLit {
-        type_id: TypeRefId,
+        type_id: LocalTypeRefId,
         fields: Vec<RecordLitField>,
         spread: Option<ExprId>,
     },
@@ -434,21 +452,21 @@ impl Pat {
 // Queries
 
 pub(crate) struct ExprCollector<'a> {
-    db: &'a dyn HirDatabase,
-    owner: DefWithBody,
-    exprs: Arena<ExprId, Expr>,
-    pats: Arena<PatId, Pat>,
+    db: &'a dyn DefDatabase,
+    owner: DefWithBodyId,
+    exprs: Arena<Expr>,
+    pats: Arena<Pat>,
     source_map: BodySourceMap,
-    params: Vec<(PatId, TypeRefId)>,
+    params: Vec<(PatId, LocalTypeRefId)>,
     body_expr: Option<ExprId>,
-    ret_type: Option<TypeRefId>,
+    ret_type: Option<LocalTypeRefId>,
     type_ref_builder: TypeRefBuilder,
     current_file_id: FileId,
     diagnostics: Vec<ExprDiagnostic>,
 }
 
 impl<'a> ExprCollector<'a> {
-    pub fn new(owner: DefWithBody, file_id: FileId, db: &'a dyn HirDatabase) -> Self {
+    pub fn new(owner: DefWithBodyId, file_id: FileId, db: &'a dyn DefDatabase) -> Self {
         ExprCollector {
             owner,
             db,
@@ -912,48 +930,6 @@ impl<'a> ExprCollector<'a> {
     }
 }
 
-pub(crate) fn body_with_source_map_query(
-    db: &dyn HirDatabase,
-    def: DefWithBody,
-) -> (Arc<Body>, Arc<BodySourceMap>) {
-    let mut collector;
-
-    match def {
-        DefWithBody::Function(ref f) => {
-            let src = f.source(db.upcast());
-            collector = ExprCollector::new(def, src.file_id, db);
-            collector.collect_fn_body(&src.value)
-        }
-    }
-
-    let (body, source_map) = collector.finish();
-    (Arc::new(body), Arc::new(source_map))
-}
-
-pub(crate) fn body_hir_query(db: &dyn HirDatabase, def: DefWithBody) -> Arc<Body> {
-    db.body_with_source_map(def).0
-}
-
-// needs arbitrary_self_types to be a method... or maybe move to the def?
-pub fn resolver_for_expr(body: Arc<Body>, db: &dyn HirDatabase, expr_id: ExprId) -> Resolver {
-    let scopes = db.expr_scopes(body.owner);
-    resolver_for_scope(body, db, scopes.scope_for(expr_id))
-}
-
-pub(crate) fn resolver_for_scope(
-    body: Arc<Body>,
-    db: &dyn HirDatabase,
-    scope_id: Option<scope::ScopeId>,
-) -> Resolver {
-    let mut r = body.owner.resolver(db);
-    let scopes = db.expr_scopes(body.owner);
-    let scope_chain = scopes.scope_chain(scope_id).collect::<Vec<_>>();
-    for scope in scope_chain.into_iter().rev() {
-        r = r.push_expr_scope(Arc::clone(&scopes), scope);
-    }
-    r
-}
-
 /// Removes any underscores from a string if present
 fn strip_underscores(s: &str) -> Cow<str> {
     if s.contains('_') {
@@ -978,7 +954,7 @@ fn filtered_float_lit(str: &str, suffix: Option<&str>, base: u32) -> (Literal, V
         errors.push(LiteralError::NonDecimalFloat(base));
     }
     let kind = match suffix {
-        Some(suf) => match BuiltinFloat::from_suffix(suf) {
+        Some(suf) => match PrimitiveFloat::from_suffix(suf) {
             Some(suf) => LiteralFloatKind::Suffixed(suf),
             None => {
                 errors.push(LiteralError::InvalidFloatSuffix(SmolStr::new(suf)));
@@ -1010,11 +986,11 @@ fn integer_lit(str: &str, suffix: Option<&str>) -> (Literal, Vec<LiteralError>) 
     let mut errors = Vec::new();
 
     let kind = match suffix {
-        Some(suf) => match BuiltinInt::from_suffix(suf) {
+        Some(suf) => match PrimitiveInt::from_suffix(suf) {
             Some(ty) => LiteralIntKind::Suffixed(ty),
             None => {
                 // 1f32 is a valid number, but its an integer disguised as a float
-                if BuiltinFloat::from_suffix(suf).is_some() {
+                if PrimitiveFloat::from_suffix(suf).is_some() {
                     return filtered_float_lit(&str, suffix, base);
                 }
 
@@ -1054,9 +1030,9 @@ fn integer_lit(str: &str, suffix: Option<&str>) -> (Literal, Vec<LiteralError>) 
 
 #[cfg(test)]
 mod test {
-    use crate::builtin_type::{BuiltinFloat, BuiltinInt};
     use crate::expr::{float_lit, LiteralError, LiteralFloat, LiteralFloatKind};
     use crate::expr::{integer_lit, LiteralInt, LiteralIntKind};
+    use crate::primitive_type::{PrimitiveFloat, PrimitiveInt};
     use crate::Literal;
     use mun_syntax::SmolStr;
 
@@ -1149,7 +1125,7 @@ mod test {
             integer_lit("123", Some("i8")),
             (
                 Literal::Int(LiteralInt {
-                    kind: LiteralIntKind::Suffixed(BuiltinInt::I8),
+                    kind: LiteralIntKind::Suffixed(PrimitiveInt::I8),
                     value: 123
                 }),
                 vec![]
@@ -1160,7 +1136,7 @@ mod test {
             integer_lit("1234", Some("i16")),
             (
                 Literal::Int(LiteralInt {
-                    kind: LiteralIntKind::Suffixed(BuiltinInt::I16),
+                    kind: LiteralIntKind::Suffixed(PrimitiveInt::I16),
                     value: 1234
                 }),
                 vec![]
@@ -1171,7 +1147,7 @@ mod test {
             integer_lit("1234", Some("i32")),
             (
                 Literal::Int(LiteralInt {
-                    kind: LiteralIntKind::Suffixed(BuiltinInt::I32),
+                    kind: LiteralIntKind::Suffixed(PrimitiveInt::I32),
                     value: 1234
                 }),
                 vec![]
@@ -1182,7 +1158,7 @@ mod test {
             integer_lit("1234", Some("i64")),
             (
                 Literal::Int(LiteralInt {
-                    kind: LiteralIntKind::Suffixed(BuiltinInt::I64),
+                    kind: LiteralIntKind::Suffixed(PrimitiveInt::I64),
                     value: 1234
                 }),
                 vec![]
@@ -1193,7 +1169,7 @@ mod test {
             integer_lit("1234", Some("i128")),
             (
                 Literal::Int(LiteralInt {
-                    kind: LiteralIntKind::Suffixed(BuiltinInt::I128),
+                    kind: LiteralIntKind::Suffixed(PrimitiveInt::I128),
                     value: 1234
                 }),
                 vec![]
@@ -1204,7 +1180,7 @@ mod test {
             integer_lit("1234", Some("isize")),
             (
                 Literal::Int(LiteralInt {
-                    kind: LiteralIntKind::Suffixed(BuiltinInt::ISIZE),
+                    kind: LiteralIntKind::Suffixed(PrimitiveInt::ISIZE),
                     value: 1234
                 }),
                 vec![]
@@ -1215,7 +1191,7 @@ mod test {
             integer_lit("123", Some("u8")),
             (
                 Literal::Int(LiteralInt {
-                    kind: LiteralIntKind::Suffixed(BuiltinInt::U8),
+                    kind: LiteralIntKind::Suffixed(PrimitiveInt::U8),
                     value: 123
                 }),
                 vec![]
@@ -1226,7 +1202,7 @@ mod test {
             integer_lit("1234", Some("u16")),
             (
                 Literal::Int(LiteralInt {
-                    kind: LiteralIntKind::Suffixed(BuiltinInt::U16),
+                    kind: LiteralIntKind::Suffixed(PrimitiveInt::U16),
                     value: 1234
                 }),
                 vec![]
@@ -1237,7 +1213,7 @@ mod test {
             integer_lit("1234", Some("u32")),
             (
                 Literal::Int(LiteralInt {
-                    kind: LiteralIntKind::Suffixed(BuiltinInt::U32),
+                    kind: LiteralIntKind::Suffixed(PrimitiveInt::U32),
                     value: 1234
                 }),
                 vec![]
@@ -1248,7 +1224,7 @@ mod test {
             integer_lit("1234", Some("u64")),
             (
                 Literal::Int(LiteralInt {
-                    kind: LiteralIntKind::Suffixed(BuiltinInt::U64),
+                    kind: LiteralIntKind::Suffixed(PrimitiveInt::U64),
                     value: 1234
                 }),
                 vec![]
@@ -1259,7 +1235,7 @@ mod test {
             integer_lit("1234", Some("u128")),
             (
                 Literal::Int(LiteralInt {
-                    kind: LiteralIntKind::Suffixed(BuiltinInt::U128),
+                    kind: LiteralIntKind::Suffixed(PrimitiveInt::U128),
                     value: 1234
                 }),
                 vec![]
@@ -1270,7 +1246,7 @@ mod test {
             integer_lit("1234", Some("usize")),
             (
                 Literal::Int(LiteralInt {
-                    kind: LiteralIntKind::Suffixed(BuiltinInt::USIZE),
+                    kind: LiteralIntKind::Suffixed(PrimitiveInt::USIZE),
                     value: 1234
                 }),
                 vec![]
@@ -1281,7 +1257,7 @@ mod test {
             integer_lit("1", Some("f32")),
             (
                 Literal::Float(LiteralFloat {
-                    kind: LiteralFloatKind::Suffixed(BuiltinFloat::F32),
+                    kind: LiteralFloatKind::Suffixed(PrimitiveFloat::F32),
                     value: 1.0
                 }),
                 vec![]
@@ -1292,7 +1268,7 @@ mod test {
             integer_lit("0x1", Some("f32")),
             (
                 Literal::Float(LiteralFloat {
-                    kind: LiteralFloatKind::Suffixed(BuiltinFloat::F32),
+                    kind: LiteralFloatKind::Suffixed(PrimitiveFloat::F32),
                     value: 0.0
                 }),
                 vec![LiteralError::NonDecimalFloat(16)]
@@ -1350,7 +1326,7 @@ mod test {
             float_lit("1234.1234e2", Some("f32")),
             (
                 Literal::Float(LiteralFloat {
-                    kind: LiteralFloatKind::Suffixed(BuiltinFloat::F32),
+                    kind: LiteralFloatKind::Suffixed(PrimitiveFloat::F32),
                     value: 123412.34
                 }),
                 vec![]
@@ -1361,7 +1337,7 @@ mod test {
             float_lit("1234.1234e2", Some("f64")),
             (
                 Literal::Float(LiteralFloat {
-                    kind: LiteralFloatKind::Suffixed(BuiltinFloat::F64),
+                    kind: LiteralFloatKind::Suffixed(PrimitiveFloat::F64),
                     value: 123412.34
                 }),
                 vec![]

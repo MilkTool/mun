@@ -19,3 +19,7 @@
     - [Struct Memory Kind](ch03-02-struct-memory-kind.md)
     - [Marshalling](ch03-03-marshalling.md)
     - [Hot Reloading Structs](ch03-04-hot-reloading-structs.md)
+
+- [Developer Documentation](ch04-00-developer-docs.md)
+    - [Salsa](ch04-01-salsa.md)
+    - [Building LLVM](ch04-02-building-llvm.md)

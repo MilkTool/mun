@@ -30,25 +30,49 @@ export async function execute(cmd) {
 (async () => {
     try {
         if(isLinux) {
-            await exec.exec("sudo apt install llvm-7 llvm-7-* liblld-7*");
+            const installScript = path.join(__dirname, "../../../../scripts/install-llvm.sh");
+            await exec.exec(`sudo ${installScript}`);
         } else if(isMacOS) {
-            await exec.exec("brew install llvm@7")
-            let llvmPath = await execute("brew --prefix llvm@7");
+            await exec.exec("brew install llvm@11")
+            let llvmPath = await execute("brew --prefix llvm@11");
             core.addPath(`${llvmPath}/bin`)   
         } else if(isWindows) {
-            let llvmCachedPath = tc.find("llvm", "7.1.0", "windows-x64");
-            if(!llvmCachedPath) {
-                let _7zPath = path.join(__dirname, '..', 'externals', '7zr.exe');
-                llvmCachedPath = await tc.downloadTool("https://github.com/mun-lang/llvm-package-windows/releases/download/v7.1.0/llvm-7.1.0-windows-x64-msvc15.7z")
-                    .then(downloadPath => tc.extract7z(downloadPath, null, _7zPath))
-                    .then(extractPath => tc.cacheDir(extractPath, "llvm", "7.1.0", "windows-x64"));
+            const downloadUrl = "https://github.com/mun-lang/llvm-package-windows/releases/download/v11.0.1/llvm-11.0.1-windows-x64-msvc16.7z"
+            core.info(`downloading LLVM from '${downloadUrl}'`)
+            const downloadLocation = await tc.downloadTool(downloadUrl);
+
+            core.info("Succesfully downloaded LLVM release, extracting...")
+            const llvmPath = path.resolve("llvm");
+            const _7zPath = path.join(__dirname, '..', 'externals', '7zr.exe');
+            let attempt = 1;
+            while(true) {
+                const args = [
+                    "x", // extract
+                    downloadLocation,
+                    `-o${llvmPath}`
+                ]
+                const exit = await exec.exec(_7zPath, args);
+                if(exit === 2 && attempt <= 4) {
+                    attempt += 1;
+                    console.error(`Error extracting LLVM release, retrying attempt #${attempt} after 1s..`)
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                }
+                else if (exit !== 0) {
+                    throw new Error("Could not extract LLVM and Clang binaries.");
+                }
+                else {
+                    core.info("Succesfully extracted LLVM release")
+                    break;
+                }
             }
-            core.addPath(`${llvmCachedPath}/bin`)
-            core.exportVariable('LIBCLANG_PATH', `${llvmCachedPath}/bin`)
+
+            core.addPath(`${llvmPath}/bin`)
+            core.exportVariable('LIBCLANG_PATH', `${llvmPath}/bin`)
         } else {
             core.setFailed(`unsupported platform '${process.platform}'`)
         }    
     } catch(error) {
+        console.error(error.stack);
         core.setFailed(error.message);
     }
 })();

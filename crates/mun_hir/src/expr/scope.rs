@@ -1,26 +1,24 @@
-use crate::code_model::DefWithBody;
 use crate::expr::{Expr, Pat, PatId, Statement};
+use crate::ids::DefWithBodyId;
 use crate::{
-    arena::{Arena, RawId},
+    arena::{Arena, Idx},
     expr::{Body, ExprId},
-    HirDatabase, Name,
+    DefDatabase, Name,
 };
 use rustc_hash::FxHashMap;
 use std::sync::Arc;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct ScopeId(RawId);
-impl_arena_id!(ScopeId);
+/// The ID of a scope in an `ExprScopes`
+pub type LocalScopeId = Idx<ScopeData>;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct ExprScopes {
-    body: Arc<Body>,
-    scopes: Arena<ScopeId, ScopeData>,
-    scope_by_expr: FxHashMap<ExprId, ScopeId>,
+    scopes: Arena<ScopeData>,
+    scope_by_expr: FxHashMap<ExprId, LocalScopeId>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) struct ScopeEntry {
+pub struct ScopeEntry {
     name: Name,
     pat: PatId,
 }
@@ -36,64 +34,62 @@ impl ScopeEntry {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) struct ScopeData {
-    parent: Option<ScopeId>,
+pub struct ScopeData {
+    parent: Option<LocalScopeId>,
     entries: Vec<ScopeEntry>,
 }
 
 impl ExprScopes {
-    pub(crate) fn expr_scopes_query(db: &dyn HirDatabase, def: DefWithBody) -> Arc<ExprScopes> {
+    pub(crate) fn expr_scopes_query(db: &dyn DefDatabase, def: DefWithBodyId) -> Arc<ExprScopes> {
         let body = db.body(def);
-        let res = ExprScopes::new(body);
-        Arc::new(res)
+        Arc::new(ExprScopes::new(&*body))
     }
 
-    fn new(body: Arc<Body>) -> ExprScopes {
+    fn new(body: &Body) -> ExprScopes {
         let mut scopes = ExprScopes {
-            body: body.clone(),
             scopes: Arena::default(),
             scope_by_expr: FxHashMap::default(),
         };
         let root = scopes.root_scope();
-        scopes.add_params_bindings(root, body.params().iter().map(|p| &p.0));
+        scopes.add_params_bindings(body, root, body.params().iter().map(|p| &p.0));
         compute_expr_scopes(body.body_expr(), &body, &mut scopes, root);
         scopes
     }
 
-    pub(crate) fn entries(&self, scope: ScopeId) -> &[ScopeEntry] {
+    pub(crate) fn entries(&self, scope: LocalScopeId) -> &[ScopeEntry] {
         &self.scopes[scope].entries
     }
 
-    pub(crate) fn scope_chain<'a>(
-        &'a self,
-        scope: Option<ScopeId>,
-    ) -> impl Iterator<Item = ScopeId> + 'a {
+    pub(crate) fn scope_chain(
+        &'_ self,
+        scope: Option<LocalScopeId>,
+    ) -> impl Iterator<Item = LocalScopeId> + '_ {
         std::iter::successors(scope, move |&scope| self.scopes[scope].parent)
     }
 
-    pub(crate) fn scope_for(&self, expr: ExprId) -> Option<ScopeId> {
+    pub(crate) fn scope_for(&self, expr: ExprId) -> Option<LocalScopeId> {
         self.scope_by_expr.get(&expr).copied()
     }
 
-    pub(crate) fn scope_by_expr(&self) -> &FxHashMap<ExprId, ScopeId> {
+    pub(crate) fn scope_by_expr(&self) -> &FxHashMap<ExprId, LocalScopeId> {
         &self.scope_by_expr
     }
 
-    fn root_scope(&mut self) -> ScopeId {
+    fn root_scope(&mut self) -> LocalScopeId {
         self.scopes.alloc(ScopeData {
             parent: None,
             entries: vec![],
         })
     }
 
-    fn new_scope(&mut self, parent: ScopeId) -> ScopeId {
+    fn new_scope(&mut self, parent: LocalScopeId) -> LocalScopeId {
         self.scopes.alloc(ScopeData {
             parent: Some(parent),
             entries: vec![],
         })
     }
 
-    fn add_bindings(&mut self, body: &Body, scope: ScopeId, pat: PatId) {
+    fn add_bindings(&mut self, body: &Body, scope: LocalScopeId, pat: PatId) {
         match &body[pat] {
             Pat::Bind { name, .. } => {
                 // bind can have a sub pattern, but it's actually not allowed
@@ -108,12 +104,16 @@ impl ExprScopes {
         }
     }
 
-    fn add_params_bindings<'a>(&mut self, scope: ScopeId, params: impl Iterator<Item = &'a PatId>) {
-        let body = Arc::clone(&self.body);
-        params.for_each(|pat| self.add_bindings(&body, scope, *pat));
+    fn add_params_bindings<'a>(
+        &mut self,
+        body: &Body,
+        scope: LocalScopeId,
+        params: impl Iterator<Item = &'a PatId>,
+    ) {
+        params.for_each(|pat| self.add_bindings(body, scope, *pat));
     }
 
-    fn set_scope(&mut self, node: ExprId, scope: ScopeId) {
+    fn set_scope(&mut self, node: ExprId, scope: LocalScopeId) {
         self.scope_by_expr.insert(node, scope);
     }
 }
@@ -123,7 +123,7 @@ fn compute_block_scopes(
     tail: Option<ExprId>,
     body: &Body,
     scopes: &mut ExprScopes,
-    mut scope: ScopeId,
+    mut scope: LocalScopeId,
 ) {
     for stmt in statements {
         match stmt {
@@ -148,7 +148,7 @@ fn compute_block_scopes(
     }
 }
 
-fn compute_expr_scopes(expr: ExprId, body: &Body, scopes: &mut ExprScopes, scope: ScopeId) {
+fn compute_expr_scopes(expr: ExprId, body: &Body, scopes: &mut ExprScopes, scope: LocalScopeId) {
     scopes.set_scope(expr, scope);
     match &body[expr] {
         Expr::Block { statements, tail } => {

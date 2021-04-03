@@ -19,13 +19,13 @@ pub fn equals_argument_type<'e, 'f, T: ArgumentReflection>(
 pub fn equals_return_type<T: ReturnTypeReflection>(
     type_info: &abi::TypeInfo,
 ) -> Result<(), (&str, &str)> {
-    match type_info.group {
-        abi::TypeGroup::FundamentalTypes => {
+    match type_info.data {
+        abi::TypeInfoData::Primitive => {
             if type_info.guid != T::type_guid() {
                 return Err((type_info.name(), T::type_name()));
             }
         }
-        abi::TypeGroup::StructTypes => {
+        abi::TypeInfoData::Struct(_) => {
             if <StructRef as ReturnTypeReflection>::type_guid() != T::type_guid() {
                 return Err(("struct", T::type_name()));
             }
@@ -128,9 +128,7 @@ impl ReturnTypeReflection for () {
     fn type_guid() -> abi::Guid {
         // TODO: Once `const_fn` lands, replace this with a const md5 hash
         static GUID: OnceCell<abi::Guid> = OnceCell::new();
-        *GUID.get_or_init(|| abi::Guid {
-            b: md5::compute(Self::type_name()).0,
-        })
+        *GUID.get_or_init(|| abi::Guid(md5::compute(Self::type_name()).0))
     }
 }
 impl<'t> Marshal<'t> for () {

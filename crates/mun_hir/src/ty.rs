@@ -8,10 +8,12 @@ use crate::display::{HirDisplay, HirFormatter};
 use crate::ty::infer::InferTy;
 use crate::ty::lower::fn_sig_for_struct_constructor;
 use crate::utils::make_mut_slice;
-use crate::{HirDatabase, Struct, StructMemoryKind};
+use crate::{HirDatabase, Struct, StructMemoryKind, TypeAlias};
 pub(crate) use infer::infer_query;
 pub use infer::InferenceResult;
-pub(crate) use lower::{callable_item_sig, fn_sig_for_fn, type_for_def, CallableDef, TypableDef};
+pub(crate) use lower::{
+    callable_item_sig, fn_sig_for_fn, type_for_cycle_recover, type_for_def, CallableDef, TypableDef,
+};
 pub use primitives::{FloatTy, IntTy};
 pub use resolve::ResolveBitness;
 use std::ops::{Deref, DerefMut};
@@ -65,6 +67,9 @@ pub enum TypeCtor {
     /// TODO: Add tuples and enumerations
     Struct(Struct),
 
+    /// A type alias
+    TypeAlias(TypeAlias),
+
     /// The never type `never`.
     Never,
 
@@ -103,10 +108,7 @@ impl Ty {
     }
 
     pub fn is_never(&self) -> bool {
-        match self.as_simple() {
-            Some(TypeCtor::Never) => true,
-            _ => false,
-        }
+        self.as_simple() == Some(TypeCtor::Never)
     }
 
     /// Returns the callable definition for the given expression or `None` if the type does not
@@ -147,7 +149,7 @@ impl Ty {
     pub fn guid_string(&self, db: &dyn HirDatabase) -> Option<String> {
         self.as_simple().and_then(|ty_ctor| match ty_ctor {
             TypeCtor::Struct(s) => {
-                let name = s.name(db.upcast()).to_string();
+                let name = s.name(db).to_string();
 
                 Some(if s.data(db.upcast()).memory_kind == StructMemoryKind::GC {
                     format!("struct {}", name)
@@ -176,6 +178,11 @@ impl Ty {
             TypeCtor::Int(ty) => Some(format!("core::{}", ty.as_str())),
             _ => None,
         })
+    }
+
+    /// Returns true if this instance represents a known type.
+    pub fn is_known(&self) -> bool {
+        *self == Ty::Unknown
     }
 }
 
@@ -263,7 +270,8 @@ impl HirDisplay for ApplicationTy {
             TypeCtor::Float(ty) => write!(f, "{}", ty),
             TypeCtor::Int(ty) => write!(f, "{}", ty),
             TypeCtor::Bool => write!(f, "bool"),
-            TypeCtor::Struct(def) => write!(f, "{}", def.name(f.db.upcast())),
+            TypeCtor::Struct(def) => write!(f, "{}", def.name(f.db)),
+            TypeCtor::TypeAlias(def) => write!(f, "{}", def.name(f.db)),
             TypeCtor::Never => write!(f, "never"),
             TypeCtor::FnDef(CallableDef::Function(def)) => {
                 let sig = fn_sig_for_fn(f.db, def);
@@ -275,7 +283,7 @@ impl HirDisplay for ApplicationTy {
             }
             TypeCtor::FnDef(CallableDef::Struct(def)) => {
                 let sig = fn_sig_for_struct_constructor(f.db, def);
-                let name = def.name(f.db.upcast());
+                let name = def.name(f.db);
                 write!(f, "ctor {}", name)?;
                 write!(f, "(")?;
                 f.write_joined(sig.params(), ", ")?;

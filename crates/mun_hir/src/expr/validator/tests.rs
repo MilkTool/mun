@@ -1,7 +1,10 @@
-use crate::db::{SourceDatabase, Upcast};
-use crate::expr::validator::ExprValidator;
-use crate::{diagnostics::DiagnosticSink, ids::LocationCtx, mock::MockDatabase, Function};
-use mun_syntax::{ast, AstNode};
+use crate::{
+    diagnostics::DiagnosticSink,
+    expr::validator::{ExprValidator, TypeAliasValidator},
+    mock::MockDatabase,
+    with_fixture::WithFixture,
+    ModuleDef, Package,
+};
 use std::fmt::Write;
 
 #[test]
@@ -66,25 +69,40 @@ fn test_uninitialized_access_while() {
     )
 }
 
+#[test]
+fn test_free_type_alias_without_type_ref() {
+    diagnostics_snapshot(
+        r#"
+    type Foo; // `Foo` must have a target type
+    "#,
+    )
+}
+
 fn diagnostics(content: &str) -> String {
-    let (db, file_id) = MockDatabase::with_single_file(content);
-    let source_file = db.parse(file_id).ok().unwrap();
+    let (db, _file_id) = MockDatabase::with_single_file(content);
 
     let mut diags = String::new();
 
     let mut diag_sink = DiagnosticSink::new(|diag| {
-        write!(diags, "{}: {}\n", diag.highlight_range(), diag.message()).unwrap();
+        write!(diags, "{:?}: {}\n", diag.highlight_range(), diag.message()).unwrap();
     });
 
-    let ctx = LocationCtx::new(db.upcast(), file_id);
-    for node in source_file.syntax().descendants() {
-        if let Some(def) = ast::FunctionDef::cast(node.clone()) {
-            let fun = Function {
-                id: ctx.to_def(&def),
-            };
-            ExprValidator::new(fun, &db).validate_body(&mut diag_sink);
+    for item in Package::all(&db)
+        .iter()
+        .flat_map(|pkg| pkg.modules(&db))
+        .flat_map(|module| module.declarations(&db))
+    {
+        match item {
+            ModuleDef::Function(item) => {
+                ExprValidator::new(item, &db).validate_body(&mut diag_sink);
+            }
+            ModuleDef::TypeAlias(item) => {
+                TypeAliasValidator::new(item, &db).validate_target_type_existence(&mut diag_sink);
+            }
+            _ => {}
         }
     }
+
     drop(diag_sink);
     diags
 }

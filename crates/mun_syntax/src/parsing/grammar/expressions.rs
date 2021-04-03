@@ -2,11 +2,11 @@ use super::*;
 use crate::parsing::grammar::paths::PATH_FIRST;
 
 pub(crate) const LITERAL_FIRST: TokenSet =
-    token_set![TRUE_KW, FALSE_KW, INT_NUMBER, FLOAT_NUMBER, STRING];
+    TokenSet::new(&[T![true], T![false], INT_NUMBER, FLOAT_NUMBER, STRING]);
 
-const EXPR_RECOVERY_SET: TokenSet = token_set![LET_KW];
+const EXPR_RECOVERY_SET: TokenSet = TokenSet::new(&[T![let]]);
 
-const ATOM_EXPR_FIRST: TokenSet = LITERAL_FIRST.union(PATH_FIRST).union(token_set![
+const ATOM_EXPR_FIRST: TokenSet = LITERAL_FIRST.union(PATH_FIRST).union(TokenSet::new(&[
     IDENT,
     T!['('],
     T!['{'],
@@ -15,9 +15,9 @@ const ATOM_EXPR_FIRST: TokenSet = LITERAL_FIRST.union(PATH_FIRST).union(token_se
     T![return],
     T![break],
     T![while],
-]);
+]));
 
-const LHS_FIRST: TokenSet = ATOM_EXPR_FIRST.union(token_set![EXCLAMATION, MINUS]);
+const LHS_FIRST: TokenSet = ATOM_EXPR_FIRST.union(TokenSet::new(&[T![!], T![-]]));
 
 const EXPR_FIRST: TokenSet = LHS_FIRST;
 
@@ -211,13 +211,7 @@ fn postfix_expr(
     loop {
         lhs = match p.current() {
             T!['('] => call_expr(p, lhs),
-            T![.] => match postfix_dot_expr(p, lhs) {
-                Ok(it) => it,
-                Err(it) => {
-                    lhs = it;
-                    break;
-                }
-            },
+            T![.] => postfix_dot_expr(p, lhs),
             INDEX => field_expr(p, lhs),
             _ => break,
         }
@@ -251,16 +245,13 @@ fn arg_list(p: &mut Parser) {
     m.complete(p, ARG_LIST);
 }
 
-fn postfix_dot_expr(
-    p: &mut Parser,
-    lhs: CompletedMarker,
-) -> Result<CompletedMarker, CompletedMarker> {
+fn postfix_dot_expr(p: &mut Parser, lhs: CompletedMarker) -> CompletedMarker {
     assert!(p.at(T![.]));
     if p.nth(1) == IDENT && p.nth(2) == T!['('] {
         unimplemented!("Method calls are not supported yet.");
     }
 
-    Ok(field_expr(p, lhs))
+    field_expr(p, lhs)
 }
 
 fn field_expr(p: &mut Parser, lhs: CompletedMarker) -> CompletedMarker {

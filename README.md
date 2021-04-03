@@ -62,9 +62,9 @@
 - **Cross compilation** - The Mun compiler is able to compile to all supported
   target platforms from any supported compiler platform.
 
-- **Powerful IDE integration** *not implemented yet* - The Mun language and
-  compiler framework are designed to support source code queries, allowing for
-  powerful IDE integrations such as code completion and refactoring tools.
+- **Powerful IDE integration** - The Mun language and compiler framework are 
+  designed to support source code queries, allowing for powerful IDE 
+  integrations such as code completion and refactoring tools.
 
 ## Example
 
@@ -142,73 +142,19 @@ Windows (64-bit only).
 
 ## Building from Source
 
-### Installing dependencies
-
 Make sure you have the following dependencies installed on you machine:
 
-#### Rust
+* [Rust](https://www.rust-lang.org/tools/install)
+* [LLVM 11](https://docs.mun-lang.org/ch04-02-building-llvm.html)
 
-Install the latest stable version of Rust, [e.g. using
-rustup](https://www.rust-lang.org/tools/install). 
-
-#### LLVM
-
-Mun targets LLVM 7.1.0. Installing LLVM is platform dependant and as such can be
-a pain. The following steps are how we install LLVM on [our CI
-runners](.github/actions/install-llvm/index.js):
-
-* ***nix**: Package managers of recent *nix distros can install binary versions
-  of LLVM, e.g.:
-  ```bash
-  # Ubuntu 18.04
-  sudo apt install llvm-7 llvm-7-* liblld-7*
-  ```
-* **Arch Linux** The binary version of LLVM can currently only be installed
-  using an AUR helper, such as `yay`:
-  ```bash
-  yay -Syu lld7-headers lld7-libs-static
-  ```
-  It is also possible to perform a manual package installation as follows:
-  ```bash
-  # NOTE: this installs all of the lld7 packages
-  cd /tmp
-  git clone https://aur.archlinux.org/lld7.git
-  cd lld7
-  makepkg -si
-  ```
-  When running `llvm-config`, an error can occur signalling that
-  `/usr/lib/libtinfo.so.5` is missing. If a newer version is present, create a
-  symlink; e.g. `ln -s /usr/lib/libtinfo.so.6 /usr/lib/libtinfo.so.5`),
-  otherwise download the library.
-* **macOS**: [Brew](https://brew.sh/) contains a binary distribution of LLVM
-  7.1.0. However, as it's not the latest version, it won't be added to the path.
-  We are using [llvm-sys](https://crates.io/crates/llvm-sys) to manage version,
-  but another option is to export the `LLVM_SYS_70_PREFIX` variable, which will
-  not clutter your `PATH`. To install:
-  ```bash
-  brew install llvm@7
-  # Export LLVM_SYS_PREFIX to not clubber PATH
-  export LLVM_SYS_PREFIX=$(brew --prefix llvm@7)
-  ```
-* **windows**: Binary distrubutions are available for Windows on the LLVM
-  website, but they do not contain a number of libraries that are required by
-  Mun. To avoid having to go to the trouble of compiling LLVM yourself, we
-  created a [repository](https://github.com/mun-lang/llvm-package-windows) that
-  automatically compiles the required binaries. It also contains a
-  [release](https://github.com/mun-lang/llvm-package-windows/releases/download/v7.1.0/llvm-7.1.0-windows-x64-msvc15.7z)
-  that you can download and extract to your machine. Once downloaded and
-  extracted, add the `<extract_dir>/bin` folder to the `PATH` environment
-  variable.
-
-### Clone source
+Clone the source code, including all submodules:
 
 ```bash
 git clone https://github.com/mun-lang/mun.git
-
 git submodule update --init --recursive
 ```
 
-### Compiling
+Use `cargo` to build a release version
 
 ```bash
 cargo build --release

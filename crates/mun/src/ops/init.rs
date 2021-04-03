@@ -1,14 +1,21 @@
-use std::fs;
 use std::path::Path;
+use std::{fs, path::PathBuf};
 
 use anyhow::anyhow;
+use clap::ArgMatches;
 
 use crate::ExitStatus;
 
 /// This method is invoked when the executable is run with the `init` argument indicating that a
 /// user requested us to create a new project in the current directory.
-pub fn init() -> Result<ExitStatus, anyhow::Error> {
-    let create_in = std::env::current_dir().expect("could not determine current working directory");
+pub fn init(matches: &ArgMatches) -> Result<ExitStatus, anyhow::Error> {
+    let create_in = matches
+        .value_of("path")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            std::env::current_dir().expect("could not determine current working directory")
+        });
+
     let project_name = create_in
         .file_name()
         .expect("Failed to fetch name of current folder.")
@@ -41,7 +48,7 @@ version="0.1.0"
         let src_path = create_in.join("src");
         create_dir(&src_path)?;
 
-        let main_file_path = src_path.join("main.mun");
+        let main_file_path = src_path.join("mod.mun");
 
         write(
             &main_file_path,

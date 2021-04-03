@@ -1,11 +1,15 @@
-use crate::db::{DefDatabase, SourceDatabase};
-use crate::mock::MockDatabase;
+use crate::{
+    db::{DefDatabase, SourceDatabase},
+    mock::MockDatabase,
+    with_fixture::WithFixture,
+    PackageId,
+};
 use std::sync::Arc;
 
 /// This function tests that the ModuleData of a module does not change if the contents of a function
 /// is changed.
 #[test]
-fn check_module_data_does_not_change() {
+fn check_package_defs_does_not_change() {
     let (mut db, file_id) = MockDatabase::with_single_file(
         r#"
     fn foo()->i32 {
@@ -16,17 +20,17 @@ fn check_module_data_does_not_change() {
 
     {
         let events = db.log_executed(|| {
-            db.module_data(file_id);
+            db.package_defs(PackageId(0));
         });
         assert!(
-            format!("{:?}", events).contains("module_data"),
+            format!("{:?}", events).contains("package_defs"),
             "{:#?}",
             events
         )
     }
     db.set_file_text(
         file_id,
-        Arc::new(
+        Arc::from(
             r#"
     fn foo()->i32 {
         90
@@ -37,10 +41,10 @@ fn check_module_data_does_not_change() {
     );
     {
         let events = db.log_executed(|| {
-            db.module_data(file_id);
+            db.package_defs(PackageId(0));
         });
         assert!(
-            !format!("{:?}", events).contains("module_data"),
+            !format!("{:?}", events).contains("package_defs"),
             "{:#?}",
             events
         )

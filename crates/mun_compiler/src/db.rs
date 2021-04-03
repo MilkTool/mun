@@ -1,39 +1,46 @@
 use crate::Config;
-use mun_codegen::IrDatabase;
-use mun_hir::{salsa, HirDatabase, Upcast};
-use std::sync::Arc;
+use hir::{salsa, HirDatabase, Upcast};
+use mun_codegen::{CodeGenDatabase, CodeGenDatabaseStorage};
 
 /// A compiler database is a salsa database that enables increment compilation.
 #[salsa::database(
-    mun_hir::SourceDatabaseStorage,
-    mun_hir::DefDatabaseStorage,
-    mun_hir::HirDatabaseStorage,
-    mun_codegen::IrDatabaseStorage
+    hir::SourceDatabaseStorage,
+    hir::InternDatabaseStorage,
+    hir::AstDatabaseStorage,
+    hir::DefDatabaseStorage,
+    hir::HirDatabaseStorage,
+    CodeGenDatabaseStorage
 )]
 pub struct CompilerDatabase {
     storage: salsa::Storage<Self>,
 }
 
-impl Upcast<dyn mun_hir::SourceDatabase> for CompilerDatabase {
-    fn upcast(&self) -> &dyn mun_hir::SourceDatabase {
+impl Upcast<dyn hir::AstDatabase> for CompilerDatabase {
+    fn upcast(&self) -> &dyn hir::AstDatabase {
         &*self
     }
 }
 
-impl Upcast<dyn mun_hir::DefDatabase> for CompilerDatabase {
-    fn upcast(&self) -> &dyn mun_hir::DefDatabase {
+impl Upcast<dyn hir::SourceDatabase> for CompilerDatabase {
+    fn upcast(&self) -> &dyn hir::SourceDatabase {
         &*self
     }
 }
 
-impl Upcast<dyn mun_hir::HirDatabase> for CompilerDatabase {
-    fn upcast(&self) -> &dyn mun_hir::HirDatabase {
+impl Upcast<dyn hir::DefDatabase> for CompilerDatabase {
+    fn upcast(&self) -> &dyn hir::DefDatabase {
         &*self
     }
 }
 
-impl Upcast<dyn mun_codegen::IrDatabase> for CompilerDatabase {
-    fn upcast(&self) -> &dyn mun_codegen::IrDatabase {
+impl Upcast<dyn hir::HirDatabase> for CompilerDatabase {
+    fn upcast(&self) -> &dyn hir::HirDatabase {
+        &*self
+    }
+}
+
+impl Upcast<dyn CodeGenDatabase> for CompilerDatabase {
+    fn upcast(&self) -> &dyn CodeGenDatabase {
         &*self
     }
 }
@@ -46,7 +53,6 @@ impl CompilerDatabase {
         };
 
         // Set the initial configuration
-        db.set_context(Arc::new(mun_codegen::Context::create()));
         db.set_config(config);
 
         db
@@ -55,7 +61,7 @@ impl CompilerDatabase {
     /// Applies the given configuration to the database
     pub fn set_config(&mut self, config: &Config) {
         self.set_target(config.target.clone());
-        self.set_optimization_lvl(config.optimization_lvl);
+        self.set_optimization_level(config.optimization_lvl);
     }
 }
 

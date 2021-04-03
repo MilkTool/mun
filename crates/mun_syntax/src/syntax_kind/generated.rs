@@ -73,6 +73,8 @@ pub enum SyntaxKind {
     FN_KW,
     IF_KW,
     IN_KW,
+    AS_KW,
+    USE_KW,
     NIL_KW,
     RETURN_KW,
     TRUE_KW,
@@ -84,6 +86,7 @@ pub enum SyntaxKind {
     STRUCT_KW,
     NEVER_KW,
     PUB_KW,
+    TYPE_KW,
     PACKAGE_KW,
     SUPER_KW,
     SELF_KW,
@@ -106,6 +109,7 @@ pub enum SyntaxKind {
     PARAM_LIST,
     PARAM,
     STRUCT_DEF,
+    TYPE_ALIAS_DEF,
     MEMORY_TYPE_SPECIFIER,
     RECORD_FIELD_DEF_LIST,
     RECORD_FIELD_DEF,
@@ -139,6 +143,10 @@ pub enum SyntaxKind {
     RECORD_LIT,
     RECORD_FIELD_LIST,
     RECORD_FIELD,
+    USE,
+    USE_TREE,
+    USE_TREE_LIST,
+    RENAME,
     // Technical kind so that we can cast from u16 safely
     #[doc(hidden)]
     __LAST,
@@ -312,6 +320,12 @@ macro_rules! T {
     (in) => {
         $crate::SyntaxKind::IN_KW
     };
+    (as) => {
+        $crate::SyntaxKind::AS_KW
+    };
+    (use) => {
+        $crate::SyntaxKind::USE_KW
+    };
     (nil) => {
         $crate::SyntaxKind::NIL_KW
     };
@@ -345,6 +359,9 @@ macro_rules! T {
     (pub) => {
         $crate::SyntaxKind::PUB_KW
     };
+    (type) => {
+        $crate::SyntaxKind::TYPE_KW
+    };
     (package) => {
         $crate::SyntaxKind::PACKAGE_KW
     };
@@ -375,99 +392,96 @@ impl From<SyntaxKind> for u16 {
 impl SyntaxKind {
     #[rustfmt::skip]
     pub fn is_keyword(self) -> bool {
-        match self {
-            | BREAK_KW
-            | DO_KW
-            | ELSE_KW
-            | FALSE_KW
-            | FOR_KW
-            | FN_KW
-            | IF_KW
-            | IN_KW
-            | NIL_KW
-            | RETURN_KW
-            | TRUE_KW
-            | WHILE_KW
-            | LOOP_KW
-            | LET_KW
-            | MUT_KW
-            | CLASS_KW
-            | STRUCT_KW
-            | NEVER_KW
-            | PUB_KW
-            | PACKAGE_KW
-            | SUPER_KW
-            | SELF_KW
-            | EXTERN_KW
-                => true,
-            _ => false
-        }
+        matches!(self,
+        BREAK_KW
+        | DO_KW
+        | ELSE_KW
+        | FALSE_KW
+        | FOR_KW
+        | FN_KW
+        | IF_KW
+        | IN_KW
+        | AS_KW
+        | USE_KW
+        | NIL_KW
+        | RETURN_KW
+        | TRUE_KW
+        | WHILE_KW
+        | LOOP_KW
+        | LET_KW
+        | MUT_KW
+        | CLASS_KW
+        | STRUCT_KW
+        | NEVER_KW
+        | PUB_KW
+        | TYPE_KW
+        | PACKAGE_KW
+        | SUPER_KW
+        | SELF_KW
+        | EXTERN_KW
+        )
     }
 
     #[rustfmt::skip]
     pub fn is_symbol(self) -> bool {
-            match self {
-                | AMP
-                | PIPE
-                | PLUS
-                | MINUS
-                | STAR
-                | SLASH
-                | PERCENT
-                | CARET
-                | HASH
-                | DOT
-                | LT
-                | GT
-                | EQ
-                | L_PAREN
-                | R_PAREN
-                | L_CURLY
-                | R_CURLY
-                | L_BRACKET
-                | R_BRACKET
-                | SEMI
-                | COLON
-                | COMMA
-                | EXCLAMATION
-                | UNDERSCORE
-                | EQEQ
-                | NEQ
-                | LTEQ
-                | GTEQ
-                | DOTDOT
-                | DOTDOTDOT
-                | PLUSEQ
-                | MINUSEQ
-                | STAREQ
-                | SLASHEQ
-                | PERCENTEQ
-                | SHLEQ
-                | SHREQ
-                | AMPEQ
-                | PIPEEQ
-                | CARETEQ
-                | DOTDOTEQ
-                | COLONCOLON
-                | THIN_ARROW
-                | AMPAMP
-                | PIPEPIPE
-                | SHL
-                | SHR
-                    => true,
-                _ => false
-            }
+        matches!(self,
+        AMP
+        | PIPE
+        | PLUS
+        | MINUS
+        | STAR
+        | SLASH
+        | PERCENT
+        | CARET
+        | HASH
+        | DOT
+        | LT
+        | GT
+        | EQ
+        | L_PAREN
+        | R_PAREN
+        | L_CURLY
+        | R_CURLY
+        | L_BRACKET
+        | R_BRACKET
+        | SEMI
+        | COLON
+        | COMMA
+        | EXCLAMATION
+        | UNDERSCORE
+        | EQEQ
+        | NEQ
+        | LTEQ
+        | GTEQ
+        | DOTDOT
+        | DOTDOTDOT
+        | PLUSEQ
+        | MINUSEQ
+        | STAREQ
+        | SLASHEQ
+        | PERCENTEQ
+        | SHLEQ
+        | SHREQ
+        | AMPEQ
+        | PIPEEQ
+        | CARETEQ
+        | DOTDOTEQ
+        | COLONCOLON
+        | THIN_ARROW
+        | AMPAMP
+        | PIPEPIPE
+        | SHL
+        | SHR
+        )
     }
 
     #[rustfmt::skip]
     pub fn is_literal(self) -> bool {
-            match self {
-                | INT_NUMBER
-                | FLOAT_NUMBER
-                | STRING
-                    => true,
-                _ => false
-            }
+        matches!(self,
+            INT_NUMBER
+            | FLOAT_NUMBER
+            | STRING
+        )
     }
 
     #[rustfmt::skip]
@@ -528,6 +542,8 @@ impl SyntaxKind {
             FN_KW => &SyntaxInfo { name: "FN_KW" },
             IF_KW => &SyntaxInfo { name: "IF_KW" },
             IN_KW => &SyntaxInfo { name: "IN_KW" },
+            AS_KW => &SyntaxInfo { name: "AS_KW" },
+            USE_KW => &SyntaxInfo { name: "USE_KW" },
             NIL_KW => &SyntaxInfo { name: "NIL_KW" },
             RETURN_KW => &SyntaxInfo { name: "RETURN_KW" },
             TRUE_KW => &SyntaxInfo { name: "TRUE_KW" },
@@ -539,6 +555,7 @@ impl SyntaxKind {
             STRUCT_KW => &SyntaxInfo { name: "STRUCT_KW" },
             NEVER_KW => &SyntaxInfo { name: "NEVER_KW" },
             PUB_KW => &SyntaxInfo { name: "PUB_KW" },
+            TYPE_KW => &SyntaxInfo { name: "TYPE_KW" },
             PACKAGE_KW => &SyntaxInfo { name: "PACKAGE_KW" },
             SUPER_KW => &SyntaxInfo { name: "SUPER_KW" },
             SELF_KW => &SyntaxInfo { name: "SELF_KW" },
@@ -561,6 +578,7 @@ impl SyntaxKind {
             PARAM_LIST => &SyntaxInfo { name: "PARAM_LIST" },
             PARAM => &SyntaxInfo { name: "PARAM" },
             STRUCT_DEF => &SyntaxInfo { name: "STRUCT_DEF" },
+            TYPE_ALIAS_DEF => &SyntaxInfo { name: "TYPE_ALIAS_DEF" },
             MEMORY_TYPE_SPECIFIER => &SyntaxInfo { name: "MEMORY_TYPE_SPECIFIER" },
             RECORD_FIELD_DEF_LIST => &SyntaxInfo { name: "RECORD_FIELD_DEF_LIST" },
             RECORD_FIELD_DEF => &SyntaxInfo { name: "RECORD_FIELD_DEF" },
@@ -594,6 +612,10 @@ impl SyntaxKind {
             RECORD_LIT => &SyntaxInfo { name: "RECORD_LIT" },
             RECORD_FIELD_LIST => &SyntaxInfo { name: "RECORD_FIELD_LIST" },
             RECORD_FIELD => &SyntaxInfo { name: "RECORD_FIELD" },
+            USE => &SyntaxInfo { name: "USE" },
+            USE_TREE => &SyntaxInfo { name: "USE_TREE" },
+            USE_TREE_LIST => &SyntaxInfo { name: "USE_TREE_LIST" },
+            RENAME => &SyntaxInfo { name: "RENAME" },
             TOMBSTONE => &SyntaxInfo { name: "TOMBSTONE" },
             EOF => &SyntaxInfo { name: "EOF" },
             __LAST => &SyntaxInfo { name: "__LAST" },
@@ -610,6 +632,8 @@ impl SyntaxKind {
             "fn" => FN_KW,
             "if" => IF_KW,
             "in" => IN_KW,
+            "as" => AS_KW,
+            "use" => USE_KW,
             "nil" => NIL_KW,
             "return" => RETURN_KW,
             "true" => TRUE_KW,
@@ -621,6 +645,7 @@ impl SyntaxKind {
             "struct" => STRUCT_KW,
             "never" => NEVER_KW,
             "pub" => PUB_KW,
+            "type" => TYPE_KW,
             "package" => PACKAGE_KW,
             "super" => SUPER_KW,
             "self" => SELF_KW,

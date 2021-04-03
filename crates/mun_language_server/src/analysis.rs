@@ -1,10 +1,8 @@
-use crate::cancelation::Canceled;
-use crate::change::AnalysisChange;
-use crate::db::AnalysisDatabase;
-use crate::diagnostics;
-use crate::diagnostics::Diagnostic;
-use hir::line_index::LineIndex;
-use hir::SourceDatabase;
+use crate::{
+    cancelation::Canceled, change::AnalysisChange, db::AnalysisDatabase, diagnostics,
+    diagnostics::Diagnostic, file_structure,
+};
+use hir::{line_index::LineIndex, AstDatabase, SourceDatabase};
 use salsa::{ParallelDatabase, Snapshot};
 use std::sync::Arc;
 
@@ -37,6 +35,11 @@ impl Analysis {
             db: self.db.snapshot(),
         }
     }
+
+    /// Requests any outstanding snapshot to cancel computations.
+    pub fn request_cancelation(&mut self) {
+        self.db.request_cancelation();
+    }
 }
 
 /// The `AnalysisSnapshot` is a snapshot of the state of the source, it enables querying for
@@ -55,13 +58,11 @@ impl AnalysisSnapshot {
         self.with_db(|db| diagnostics::diagnostics(db, file_id))
     }
 
-    /// Returns all the files in the given source root
-    pub fn source_root_files(
-        &self,
-        source_root: hir::SourceRootId,
-    ) -> Cancelable<Vec<hir::FileId>> {
+    /// Returns all the source files of the given package
+    pub fn package_source_files(&self, package_id: hir::PackageId) -> Cancelable<Vec<hir::FileId>> {
         self.with_db(|db| {
-            let source_root = db.source_root(source_root);
+            let packages = db.packages();
+            let source_root = db.source_root(packages[package_id].source_root);
             source_root.files().collect()
         })
     }
@@ -69,6 +70,14 @@ impl AnalysisSnapshot {
     /// Returns the line index for the specified file
     pub fn file_line_index(&self, file_id: hir::FileId) -> Cancelable<Arc<LineIndex>> {
         self.with_db(|db| db.line_index(file_id))
+    }
+
+    /// Returns a tree structure of the symbols of a file.
+    pub fn file_structure(
+        &self,
+        file_id: hir::FileId,
+    ) -> Cancelable<Vec<file_structure::StructureNode>> {
+        self.with_db(|db| file_structure::file_structure(&db.parse(file_id).tree()))
     }
 
     /// Performs an operation on that may be Canceled.

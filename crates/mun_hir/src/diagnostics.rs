@@ -1,4 +1,4 @@
-use crate::adt::StructKind;
+use crate::code_model::StructKind;
 use crate::in_file::InFile;
 use crate::{FileId, HirDatabase, IntTy, Name, Ty};
 use mun_syntax::{ast, AstPtr, SmolStr, SyntaxNode, SyntaxNodePtr, TextRange};
@@ -110,6 +110,46 @@ impl Diagnostic for UnresolvedType {
 
     fn source(&self) -> InFile<SyntaxNodePtr> {
         InFile::new(self.file, self.type_ref.syntax_node_ptr())
+    }
+
+    fn as_any(&self) -> &(dyn Any + Send + 'static) {
+        self
+    }
+}
+
+#[derive(Debug)]
+pub struct CyclicType {
+    pub file: FileId,
+    pub type_ref: AstPtr<ast::TypeRef>,
+}
+
+impl Diagnostic for CyclicType {
+    fn message(&self) -> String {
+        "cyclic type".to_string()
+    }
+
+    fn source(&self) -> InFile<SyntaxNodePtr> {
+        InFile::new(self.file, self.type_ref.syntax_node_ptr())
+    }
+
+    fn as_any(&self) -> &(dyn Any + Send + 'static) {
+        self
+    }
+}
+
+#[derive(Debug)]
+pub struct PrivateAccess {
+    pub file: FileId,
+    pub expr: SyntaxNodePtr,
+}
+
+impl Diagnostic for PrivateAccess {
+    fn message(&self) -> String {
+        "access of private type".to_string()
+    }
+
+    fn source(&self) -> InFile<SyntaxNodePtr> {
+        InFile::new(self.file, self.expr)
     }
 
     fn as_any(&self) -> &(dyn Any + Send + 'static) {
@@ -433,6 +473,7 @@ impl Diagnostic for FieldCountMismatch {
 pub struct MissingFields {
     pub file: FileId,
     pub fields: SyntaxNodePtr,
+    pub struct_ty: Ty,
     pub field_names: Vec<Name>,
 }
 
@@ -683,6 +724,63 @@ impl Diagnostic for InvalidLiteral {
     }
 
     fn as_any(&self) -> &(dyn Any + Send + 'static) {
+        self
+    }
+}
+
+#[derive(Debug)]
+pub struct FreeTypeAliasWithoutTypeRef {
+    pub type_alias_def: InFile<SyntaxNodePtr>,
+}
+
+impl Diagnostic for FreeTypeAliasWithoutTypeRef {
+    fn message(&self) -> String {
+        "free type alias without type ref".to_string()
+    }
+
+    fn source(&self) -> InFile<SyntaxNodePtr> {
+        self.type_alias_def
+    }
+
+    fn as_any(&self) -> &(dyn Any + Send + 'static) {
+        self
+    }
+}
+
+#[derive(Debug)]
+pub struct UnresolvedImport {
+    pub use_tree: InFile<AstPtr<ast::UseTree>>,
+}
+
+impl Diagnostic for UnresolvedImport {
+    fn message(&self) -> String {
+        "unresolved import".to_string()
+    }
+
+    fn source(&self) -> InFile<SyntaxNodePtr> {
+        self.use_tree.map(Into::into)
+    }
+
+    fn as_any(&self) -> &(dyn Any + Send) {
+        self
+    }
+}
+
+#[derive(Debug)]
+pub struct ImportDuplicateDefinition {
+    pub use_tree: InFile<AstPtr<ast::UseTree>>,
+}
+
+impl Diagnostic for ImportDuplicateDefinition {
+    fn message(&self) -> String {
+        "a second item with the same name imported. Try to use an alias.".to_string()
+    }
+
+    fn source(&self) -> InFile<SyntaxNodePtr> {
+        self.use_tree.map(Into::into)
+    }
+
+    fn as_any(&self) -> &(dyn Any + Send) {
         self
     }
 }

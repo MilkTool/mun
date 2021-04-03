@@ -3,14 +3,14 @@
 Mun distinguishes itself from other languages by its inherent hot reloading
 capabilities. The following example illustrates how you can create a hot
 reloadable application by slightly modifying the [Hello,
-fibonacci?](ch01-01-hello-fibonacci.md) example. In Listing 1-2, the
+fibonacci?](ch01-02-hello-fibonacci.md) example. In Listing 1-2, the
 `fibonacci_n` function has been removed and the `pub` keyword has been added to
 both `args` and `fibonacci`.
 
 Filename: hello_fibonacci.mun
 
 <!-- HACK: Add an extension to support hiding of Mun code -->
-```mun 
+```mun
 {{#include ../listings/ch01-getting-started/listing02.mun}}
 ```
 

@@ -1,9 +1,15 @@
-use crate::in_file::InFile;
-use crate::{db::DefDatabase, Arena, FileId, RawId};
+use crate::{
+    arena::{Arena, Idx},
+    db::AstDatabase,
+    in_file::InFile,
+    FileId,
+};
 use mun_syntax::{ast, AstNode, AstPtr, SyntaxNode, SyntaxNodePtr};
-use std::hash::{Hash, Hasher};
-use std::marker::PhantomData;
-use std::sync::Arc;
+use std::{
+    hash::{Hash, Hasher},
+    marker::PhantomData,
+    sync::Arc,
+};
 
 /// `AstId` points to an AST node in any file.
 ///
@@ -11,7 +17,7 @@ use std::sync::Arc;
 pub(crate) type AstId<N> = InFile<FileAstId<N>>;
 
 impl<N: AstNode> AstId<N> {
-    pub fn to_node(&self, db: &dyn DefDatabase) -> N {
+    pub fn to_node(&self, db: &dyn AstDatabase) -> N {
         let root = db.parse(self.file_id);
         db.ast_id_map(self.file_id)
             .get(self.value)
@@ -20,7 +26,7 @@ impl<N: AstNode> AstId<N> {
 }
 
 #[derive(Debug)]
-pub(crate) struct FileAstId<N: AstNode> {
+pub struct FileAstId<N: AstNode> {
     raw: ErasedFileAstId,
     _ty: PhantomData<fn() -> N>,
 }
@@ -53,27 +59,15 @@ impl<N: AstNode> FileAstId<N> {
 /// Maps items' `SyntaxNode`s to `ErasedFileAstId`s and back.
 #[derive(Debug, PartialEq, Eq, Default)]
 pub struct AstIdMap {
-    arena: Arena<ErasedFileAstId, SyntaxNodePtr>,
+    arena: Arena<SyntaxNodePtr>,
 }
 
-/// An id of an AST node in a specific file.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct ErasedFileAstId(RawId);
-impl_arena_id!(ErasedFileAstId);
+type ErasedFileAstId = Idx<SyntaxNodePtr>;
 
 impl AstIdMap {
-    pub(crate) fn ast_id_map_query(db: &dyn DefDatabase, file_id: FileId) -> Arc<AstIdMap> {
+    pub(crate) fn ast_id_map_query(db: &dyn AstDatabase, file_id: FileId) -> Arc<AstIdMap> {
         let map = AstIdMap::from_source(&db.parse(file_id).tree().syntax());
         Arc::new(map)
-    }
-
-    pub(crate) fn file_item_query(
-        db: &dyn DefDatabase,
-        file_id: FileId,
-        ast_id: ErasedFileAstId,
-    ) -> SyntaxNode {
-        let node = db.parse(file_id);
-        db.ast_id_map(file_id).arena[ast_id].to_node(&node.tree().syntax())
     }
 
     pub(crate) fn ast_id<N: AstNode>(&self, item: &N) -> FileAstId<N> {

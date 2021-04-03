@@ -4,7 +4,7 @@ use crate::{
 };
 use crate::{SmolStr, SyntaxNode};
 use abi::StructMemoryKind;
-use text_unit::TextRange;
+use text_size::TextRange;
 
 impl ast::Name {
     pub fn text(&self) -> &SmolStr {
@@ -51,15 +51,15 @@ impl ast::FunctionDef {
             .or_else(|| fn_kw.map(|kw| kw.end()))
             .unwrap_or_else(|| self.syntax().text_range().end());
 
-        TextRange::from_to(start, end)
+        TextRange::new(start, end)
     }
 }
 
 fn text_of_first_token(node: &SyntaxNode) -> &SmolStr {
     node.green()
         .children()
-        .first()
-        .and_then(|it| it.as_token())
+        .next()
+        .and_then(|it| it.into_token())
         .unwrap()
         .text()
 }
@@ -69,6 +69,7 @@ pub enum PathSegmentKind {
     Name(ast::NameRef),
     SelfKw,
     SuperKw,
+    PackageKw,
 }
 
 impl ast::PathSegment {
@@ -86,6 +87,7 @@ impl ast::PathSegment {
             match self.syntax().first_child_or_token()?.kind() {
                 T![self] => PathSegmentKind::SelfKw,
                 T![super] => PathSegmentKind::SuperKw,
+                T![package] => PathSegmentKind::PackageKw,
                 _ => return None,
             }
         };
@@ -93,10 +95,10 @@ impl ast::PathSegment {
     }
 
     pub fn has_colon_colon(&self) -> bool {
-        match self.syntax.first_child_or_token().map(|s| s.kind()) {
-            Some(T![::]) => true,
-            _ => false,
-        }
+        matches!(
+            self.syntax.first_child_or_token().map(|s| s.kind()),
+            Some(T![::])
+        )
     }
 }
 
@@ -164,7 +166,7 @@ impl ast::StructDef {
             .or_else(|| struct_kw.map(|kw| kw.end()))
             .unwrap_or_else(|| self.syntax().text_range().end());
 
-        TextRange::from_to(start, end)
+        TextRange::new(start, end)
     }
 }
 
@@ -195,5 +197,13 @@ impl ast::Visibility {
         self.syntax()
             .children_with_tokens()
             .any(|it| it.kind() == T![super])
+    }
+}
+
+impl ast::UseTree {
+    pub fn has_star_token(&self) -> bool {
+        self.syntax()
+            .children_with_tokens()
+            .any(|it| it.kind() == T![*])
     }
 }

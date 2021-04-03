@@ -207,9 +207,7 @@ impl<'r> ReturnTypeReflection for StructRef<'r> {
     fn type_guid() -> abi::Guid {
         // TODO: Once `const_fn` lands, replace this with a const md5 hash
         static GUID: OnceCell<abi::Guid> = OnceCell::new();
-        *GUID.get_or_init(|| abi::Guid {
-            b: md5::compute(<Self as ReturnTypeReflection>::type_name()).0,
-        })
+        *GUID.get_or_init(|| abi::Guid(md5::compute(<Self as ReturnTypeReflection>::type_name()).0))
     }
 }
 
@@ -307,7 +305,7 @@ impl RootedStruct {
             let runtime_ref = runtime.borrow();
             // Safety: The type returned from `ptr_type` is guaranteed to live at least as long as
             // `Runtime` does not change. As we hold a shared reference to `Runtime`, this is safe.
-            assert!(unsafe { gc.ptr_type(raw.0).into_inner().as_ref().group.is_struct() });
+            assert!(unsafe { gc.ptr_type(raw.0).into_inner().as_ref().data.is_struct() });
 
             GcRootPtr::new(&runtime_ref.gc, raw.0)
         };

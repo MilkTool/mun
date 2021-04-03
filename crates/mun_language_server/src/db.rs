@@ -1,9 +1,9 @@
 #![allow(clippy::enum_variant_names)] // This is a HACK because we use salsa
 
 use crate::cancelation::Canceled;
-use hir::{DefDatabaseStorage, HirDatabase, HirDatabaseStorage, SourceDatabaseStorage, Upcast};
+use hir::{HirDatabase, Upcast};
 use mun_target::spec::Target;
-use salsa::{Database, Snapshot};
+use salsa::{Database, Durability, Snapshot};
 use std::panic;
 
 /// The `AnalysisDatabase` provides the database for all analyses. A database is given input and
@@ -17,7 +17,13 @@ use std::panic;
 ///
 /// With this struct we can reuse a lot of functionality from the compiler which should provide a
 /// better user experience.
-#[salsa::database(SourceDatabaseStorage, DefDatabaseStorage, HirDatabaseStorage)]
+#[salsa::database(
+    hir::SourceDatabaseStorage,
+    hir::DefDatabaseStorage,
+    hir::HirDatabaseStorage,
+    hir::AstDatabaseStorage,
+    hir::InternDatabaseStorage
+)]
 pub(crate) struct AnalysisDatabase {
     storage: salsa::Storage<Self>,
 }
@@ -32,6 +38,11 @@ impl AnalysisDatabase {
 
         db
     }
+
+    /// Triggers a simple write on the database which will cancell all outstanding snapshots.
+    pub fn request_cancelation(&mut self) {
+        self.salsa_runtime_mut().synthetic_write(Durability::LOW);
+    }
 }
 
 impl salsa::Database for AnalysisDatabase {
@@ -43,6 +54,12 @@ impl salsa::Database for AnalysisDatabase {
             }
             _ => (),
         }
+    }
+}
+
+impl Upcast<dyn hir::AstDatabase> for AnalysisDatabase {
+    fn upcast(&self) -> &dyn hir::AstDatabase {
+        &*self
     }
 }
 

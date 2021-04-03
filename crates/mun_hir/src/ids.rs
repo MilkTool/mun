@@ -1,8 +1,67 @@
-use crate::in_file::InFile;
-use crate::source_id::{AstId, FileAstId};
-use crate::{DefDatabase, FileId};
-use mun_syntax::{ast, AstNode};
+use crate::{
+    item_tree::{Function, ItemTreeId, ItemTreeNode, Struct, TypeAlias},
+    module_tree::LocalModuleId,
+    primitive_type::PrimitiveType,
+    DefDatabase, PackageId,
+};
 use std::hash::{Hash, Hasher};
+
+#[derive(Debug)]
+pub struct ItemLoc<N: ItemTreeNode> {
+    pub id: ItemTreeId<N>,
+}
+
+impl<N: ItemTreeNode> PartialEq for ItemLoc<N> {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+impl<N: ItemTreeNode> Eq for ItemLoc<N> {}
+
+impl<N: ItemTreeNode> Hash for ItemLoc<N> {
+    fn hash<H: Hasher>(&self, hasher: &mut H) {
+        self.id.hash(hasher);
+    }
+}
+
+impl<N: ItemTreeNode> Clone for ItemLoc<N> {
+    fn clone(&self) -> ItemLoc<N> {
+        ItemLoc { id: self.id }
+    }
+}
+impl<N: ItemTreeNode> Copy for ItemLoc<N> {}
+
+#[derive(Debug)]
+pub struct AssocItemLoc<N: ItemTreeNode> {
+    pub module: ModuleId,
+    pub id: ItemTreeId<N>,
+}
+
+impl<N: ItemTreeNode> Clone for AssocItemLoc<N> {
+    fn clone(&self) -> Self {
+        Self {
+            module: self.module,
+            id: self.id,
+        }
+    }
+}
+
+impl<N: ItemTreeNode> Copy for AssocItemLoc<N> {}
+
+impl<N: ItemTreeNode> PartialEq for AssocItemLoc<N> {
+    fn eq(&self, other: &Self) -> bool {
+        self.module == other.module && self.id == other.id
+    }
+}
+
+impl<N: ItemTreeNode> Eq for AssocItemLoc<N> {}
+
+impl<N: ItemTreeNode> Hash for AssocItemLoc<N> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.module.hash(state);
+        self.id.hash(state);
+    }
+}
 
 macro_rules! impl_intern_key {
     ($name:ident) => {
@@ -17,105 +76,111 @@ macro_rules! impl_intern_key {
     };
 }
 
-#[derive(Debug)]
-pub struct ItemLoc<N: AstNode> {
-    ast_id: AstId<N>,
-}
+macro_rules! impl_intern {
+    ($id:ident, $loc:ident, $intern:ident, $lookup:ident) => {
+        impl_intern_key!($id);
 
-impl<N: AstNode> PartialEq for ItemLoc<N> {
-    fn eq(&self, other: &Self) -> bool {
-        self.ast_id == other.ast_id
-    }
-}
-impl<N: AstNode> Eq for ItemLoc<N> {}
-impl<N: AstNode> Hash for ItemLoc<N> {
-    fn hash<H: Hasher>(&self, hasher: &mut H) {
-        self.ast_id.hash(hasher);
-    }
-}
-
-impl<N: AstNode> Clone for ItemLoc<N> {
-    fn clone(&self) -> ItemLoc<N> {
-        ItemLoc {
-            ast_id: self.ast_id,
+        impl Intern for $loc {
+            type ID = $id;
+            fn intern(self, db: &dyn DefDatabase) -> $id {
+                db.$intern(self)
+            }
         }
-    }
+
+        impl Lookup for $id {
+            type Data = $loc;
+            fn lookup(&self, db: &dyn DefDatabase) -> $loc {
+                db.$lookup(*self)
+            }
+        }
+    };
 }
 
-#[derive(Clone, Copy)]
-pub(crate) struct LocationCtx<DB> {
-    db: DB,
-    file_id: FileId,
-}
-
-impl<'a> LocationCtx<&'a dyn DefDatabase> {
-    pub(crate) fn new(
-        db: &'a dyn DefDatabase,
-        file_id: FileId,
-    ) -> LocationCtx<&'a dyn DefDatabase> {
-        LocationCtx { db, file_id }
-    }
-
-    pub(crate) fn to_def<N, DEF>(self, ast: &N) -> DEF
-    where
-        N: AstNode,
-        DEF: AstItemDef<N>,
-    {
-        DEF::from_ast(self, ast)
-    }
-}
-
-pub(crate) trait AstItemDef<N: AstNode>: salsa::InternKey + Clone {
-    fn intern(db: &dyn DefDatabase, loc: ItemLoc<N>) -> Self;
-    fn lookup_intern(self, db: &dyn DefDatabase) -> ItemLoc<N>;
-
-    fn from_ast(ctx: LocationCtx<&dyn DefDatabase>, ast: &N) -> Self {
-        let items = ctx.db.ast_id_map(ctx.file_id);
-        let item_id = items.ast_id(ast);
-        Self::from_ast_id(ctx, item_id)
-    }
-
-    fn from_ast_id(ctx: LocationCtx<&dyn DefDatabase>, ast_id: FileAstId<N>) -> Self {
-        let loc = ItemLoc {
-            ast_id: ast_id.with_file_id(ctx.file_id),
-        };
-        Self::intern(ctx.db, loc)
-    }
-
-    fn source(self, db: &dyn DefDatabase) -> InFile<N> {
-        let loc = self.lookup_intern(db);
-        let ast = loc.ast_id.to_node(db);
-        InFile::new(loc.ast_id.file_id, ast)
-    }
-
-    fn file_id(self, db: &dyn DefDatabase) -> FileId {
-        self.lookup_intern(db).ast_id.file_id
-    }
+/// Represents an id of a module inside a package.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
+pub struct ModuleId {
+    pub package: PackageId,
+    pub local_id: LocalModuleId,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub struct FunctionId(salsa::InternId);
-impl_intern_key!(FunctionId);
-
-impl AstItemDef<ast::FunctionDef> for FunctionId {
-    fn intern(db: &dyn DefDatabase, loc: ItemLoc<ast::FunctionDef>) -> Self {
-        db.intern_function(loc)
-    }
-    fn lookup_intern(self, db: &dyn DefDatabase) -> ItemLoc<ast::FunctionDef> {
-        db.lookup_intern_function(self)
-    }
-}
+pub(crate) type FunctionLoc = AssocItemLoc<Function>;
+impl_intern!(
+    FunctionId,
+    FunctionLoc,
+    intern_function,
+    lookup_intern_function
+);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct StructId(salsa::InternId);
-impl_intern_key!(StructId);
+pub(crate) type StructLoc = AssocItemLoc<Struct>;
+impl_intern!(StructId, StructLoc, intern_struct, lookup_intern_struct);
 
-impl AstItemDef<ast::StructDef> for StructId {
-    fn intern(db: &dyn DefDatabase, loc: ItemLoc<ast::StructDef>) -> Self {
-        db.intern_struct(loc)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct TypeAliasId(salsa::InternId);
+pub(crate) type TypeAliasLoc = AssocItemLoc<TypeAlias>;
+impl_intern!(
+    TypeAliasId,
+    TypeAliasLoc,
+    intern_type_alias,
+    lookup_intern_type_alias
+);
+
+pub trait Intern {
+    type ID;
+    fn intern(self, db: &dyn DefDatabase) -> Self::ID;
+}
+
+pub trait Lookup {
+    type Data;
+    fn lookup(&self, db: &dyn DefDatabase) -> Self::Data;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ItemDefinitionId {
+    ModuleId(ModuleId),
+    FunctionId(FunctionId),
+    StructId(StructId),
+    TypeAliasId(TypeAliasId),
+    PrimitiveType(PrimitiveType),
+}
+
+impl From<ModuleId> for ItemDefinitionId {
+    fn from(id: ModuleId) -> Self {
+        ItemDefinitionId::ModuleId(id)
     }
+}
+impl From<FunctionId> for ItemDefinitionId {
+    fn from(id: FunctionId) -> Self {
+        ItemDefinitionId::FunctionId(id)
+    }
+}
+impl From<StructId> for ItemDefinitionId {
+    fn from(id: StructId) -> Self {
+        ItemDefinitionId::StructId(id)
+    }
+}
+impl From<TypeAliasId> for ItemDefinitionId {
+    fn from(id: TypeAliasId) -> Self {
+        ItemDefinitionId::TypeAliasId(id)
+    }
+}
+impl From<PrimitiveType> for ItemDefinitionId {
+    fn from(id: PrimitiveType) -> Self {
+        ItemDefinitionId::PrimitiveType(id)
+    }
+}
 
-    fn lookup_intern(self, db: &dyn DefDatabase) -> ItemLoc<ast::StructDef> {
-        db.lookup_intern_struct(self)
+/// Definitions which have a body
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DefWithBodyId {
+    FunctionId(FunctionId),
+}
+
+impl From<FunctionId> for DefWithBodyId {
+    fn from(id: FunctionId) -> Self {
+        DefWithBodyId::FunctionId(id)
     }
 }

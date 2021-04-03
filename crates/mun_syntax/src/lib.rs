@@ -31,7 +31,7 @@ pub use crate::{
     syntax_kind::SyntaxKind,
     syntax_node::{Direction, SyntaxElement, SyntaxNode, SyntaxToken, SyntaxTreeBuilder},
 };
-pub use rowan::{SmolStr, TextRange, TextUnit};
+pub use rowan::{SmolStr, TextRange, TextSize, WalkEvent};
 
 use rowan::GreenNode;
 
@@ -41,7 +41,7 @@ use rowan::GreenNode;
 #[derive(Debug, PartialEq, Eq)]
 pub struct Parse<T> {
     green: GreenNode,
-    errors: Arc<Vec<SyntaxError>>,
+    errors: Arc<[SyntaxError]>,
     _ty: PhantomData<fn() -> T>,
 }
 
@@ -59,7 +59,7 @@ impl<T> Parse<T> {
     fn new(green: GreenNode, errors: Vec<SyntaxError>) -> Parse<T> {
         Parse {
             green,
-            errors: Arc::new(errors),
+            errors: Arc::from(errors),
             _ty: PhantomData,
         }
     }
@@ -86,7 +86,7 @@ impl<T: AstNode> Parse<T> {
         &*self.errors
     }
 
-    pub fn ok(self) -> Result<T, Arc<Vec<SyntaxError>>> {
+    pub fn ok(self) -> Result<T, Arc<[SyntaxError]>> {
         if self.errors.is_empty() {
             Ok(self.tree())
         } else {
@@ -128,10 +128,35 @@ impl SourceFile {
         //errors.extend(validation::validate(&SourceFile::new(green.clone())));
         Parse {
             green,
-            errors: Arc::new(errors),
+            errors: Arc::from(errors),
             _ty: PhantomData,
         }
     }
+}
+
+/// Matches a `SyntaxNode` against an `ast` type.
+///
+/// # Example:
+///
+/// ```ignore
+/// match_ast! {
+///     match node {
+///         ast::CallExpr(it) => { ... },
+///         _ => None,
+///     }
+/// }
+/// ```
+#[macro_export]
+macro_rules! match_ast {
+    (match $node:ident { $($tt:tt)* }) => { match_ast!(match ($node) { $($tt)* }) };
+
+    (match ($node:expr) {
+        $( ast::$ast:ident($it:ident) => $res:expr, )*
+        _ => $catch_all:expr $(,)?
+    }) => {{
+        $( if let Some($it) = ast::$ast::cast($node.clone()) { $res } else )*
+        { $catch_all }
+    }};
 }
 
 /// This tests does not assert anything and instead just shows off the crate's API.
@@ -163,6 +188,8 @@ fn api_walkthrough() {
         match item.kind() {
             ast::ModuleItemKind::FunctionDef(f) => func = Some(f),
             ast::ModuleItemKind::StructDef(_) => (),
+            ast::ModuleItemKind::TypeAliasDef(_) => (),
+            ast::ModuleItemKind::Use(_) => (),
         }
     }
 

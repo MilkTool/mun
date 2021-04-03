@@ -1,3 +1,13 @@
+pub use inkwell::{builder::Builder, context::Context, module::Module, OptimizationLevel};
+
+pub use crate::{
+    assembly::{AssemblyIR, TargetAssembly},
+    code_gen::AssemblyBuilder,
+    db::{CodeGenDatabase, CodeGenDatabaseStorage},
+    module_group::ModuleGroup,
+    module_partition::{ModuleGroupId, ModulePartition},
+};
+
 /// This library generates machine code from HIR using inkwell which is a safe wrapper around LLVM.
 mod code_gen;
 mod db;
@@ -13,19 +23,7 @@ mod test;
 pub mod value;
 
 pub(crate) mod intrinsics;
+mod linker;
+mod module_group;
+mod module_partition;
 pub(crate) mod type_info;
-
-pub use inkwell::{builder::Builder, context::Context, module::Module, OptimizationLevel};
-
-pub use crate::{
-    assembly::Assembly,
-    code_gen::ModuleBuilder,
-    db::{IrDatabase, IrDatabaseStorage},
-};
-
-#[derive(Clone, Debug, Default, Eq, Hash, PartialEq)]
-pub struct CodeGenParams {
-    /// Whether generated code should support extern function calls.
-    /// This allows function parameters with `struct(value)` types to be marshalled.
-    make_marshallable: bool,
-}

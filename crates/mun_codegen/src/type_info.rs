@@ -1,33 +1,15 @@
 use super::ir::IsIrType;
-use crate::IrDatabase;
 use abi::Guid;
+use hir::HirDatabase;
 use inkwell::context::Context;
 use inkwell::targets::TargetData;
 use inkwell::types::AnyType;
 use std::hash::{Hash, Hasher};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum TypeGroup {
-    FundamentalTypes,
-    StructTypes(hir::Struct),
-}
-
-impl From<TypeGroup> for u64 {
-    fn from(group: TypeGroup) -> Self {
-        match group {
-            TypeGroup::FundamentalTypes => 0,
-            TypeGroup::StructTypes(_) => 1,
-        }
-    }
-}
-
-impl TypeGroup {
-    pub fn to_abi_type(&self) -> abi::TypeGroup {
-        match self {
-            TypeGroup::FundamentalTypes => abi::TypeGroup::FundamentalTypes,
-            TypeGroup::StructTypes(_) => abi::TypeGroup::StructTypes,
-        }
-    }
+pub enum TypeInfoData {
+    Primitive,
+    Struct(hir::Struct),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -46,7 +28,7 @@ pub struct TypeSize {
 }
 
 impl TypeSize {
-    pub fn from_ir_type(ty: &impl AnyType, target: &TargetData) -> Self {
+    pub fn from_ir_type<'ink>(ty: &impl AnyType<'ink>, target: &TargetData) -> Self {
         Self {
             bit_size: target.get_bit_size(ty),
             store_size: target.get_store_size(ty),
@@ -60,13 +42,13 @@ impl TypeSize {
 pub struct TypeInfo {
     pub guid: Guid,
     pub name: String,
-    pub group: TypeGroup,
     pub size: TypeSize,
+    pub data: TypeInfoData,
 }
 
 impl Hash for TypeInfo {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        state.write(&self.guid.b)
+        state.write(&self.guid.0)
     }
 }
 
@@ -89,29 +71,27 @@ impl PartialOrd for TypeInfo {
 }
 
 impl TypeInfo {
-    pub fn new_fundamental<S: AsRef<str>>(name: S, type_size: TypeSize) -> TypeInfo {
+    pub fn new_primitive<S: AsRef<str>>(name: S, type_size: TypeSize) -> TypeInfo {
         TypeInfo {
             name: name.as_ref().to_string(),
-            guid: Guid {
-                b: md5::compute(name.as_ref()).0,
-            },
-            group: TypeGroup::FundamentalTypes,
+            guid: Guid(md5::compute(name.as_ref()).0),
             size: type_size,
+            data: TypeInfoData::Primitive,
         }
     }
 
-    pub fn new_struct(db: &dyn IrDatabase, s: hir::Struct, type_size: TypeSize) -> TypeInfo {
-        let name = s.name(db.upcast()).to_string();
+    pub fn new_struct(db: &dyn HirDatabase, s: hir::Struct, type_size: TypeSize) -> TypeInfo {
+        let name = s.full_name(db);
         let guid_string = {
             let fields: Vec<String> = s
-                .fields(db.upcast())
+                .fields(db)
                 .into_iter()
                 .map(|f| {
                     let ty_string = f
-                        .ty(db.upcast())
-                        .guid_string(db.upcast())
+                        .ty(db)
+                        .guid_string(db)
                         .expect("type should be convertible to a string");
-                    format!("{}: {}", f.name(db.upcast()).to_string(), ty_string)
+                    format!("{}: {}", f.name(db).to_string(), ty_string)
                 })
                 .collect();
 
@@ -122,12 +102,10 @@ impl TypeInfo {
             )
         };
         Self {
-            guid: Guid {
-                b: md5::compute(&guid_string).0,
-            },
+            guid: Guid(md5::compute(&guid_string).0),
             name,
-            group: TypeGroup::StructTypes(s),
             size: type_size,
+            data: TypeInfoData::Struct(s),
         }
     }
 }
@@ -168,7 +146,7 @@ macro_rules! impl_fundamental_static_type_info {
             impl HasStaticTypeInfo for $ty {
                 fn type_info(context: &Context, target: &TargetData) -> TypeInfo {
                     let ty = <$ty as IsIrType>::ir_type(context, target);
-                    TypeInfo::new_fundamental(
+                    TypeInfo::new_primitive(
                         format!("core::{}", stringify!($ty)),
                         TypeSize::from_ir_type(&ty, target)
                     )
@@ -184,8 +162,8 @@ impl_fundamental_static_type_info!(
 
 impl<T: HasStaticTypeName> HasStaticTypeInfo for *mut T {
     fn type_info(context: &Context, target: &TargetData) -> TypeInfo {
-        let ty = target.ptr_sized_int_type(None);
-        TypeInfo::new_fundamental(
+        let ty = context.ptr_sized_int_type(target, None);
+        TypeInfo::new_primitive(
             format!("*mut {}", T::type_name(context, target)),
             TypeSize::from_ir_type(&ty, target),
         )
@@ -197,8 +175,8 @@ impl<T: HasStaticTypeName> HasStaticTypeInfo for *const T {
         context: &inkwell::context::Context,
         target: &inkwell::targets::TargetData,
     ) -> TypeInfo {
-        let ty = target.ptr_sized_int_type(None);
-        TypeInfo::new_fundamental(
+        let ty = context.ptr_sized_int_type(target, None);
+        TypeInfo::new_primitive(
             format!("*const {}", T::type_name(context, target)),
             TypeSize::from_ir_type(&ty, target),
         )

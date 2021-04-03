@@ -355,3 +355,59 @@ fn extern_fn() {
     "#,
     )
 }
+
+#[test]
+fn type_alias_def() {
+    snapshot_test(
+        r#"
+    type Foo = i32;
+    type Bar = Foo;
+    "#,
+    )
+}
+#[test]
+fn function_return_path() {
+    snapshot_test(
+        r#"
+        fn main() -> self::Foo {}
+        fn main1() -> super::Foo {}
+        fn main2() -> package::Foo {}
+        fn main3() -> package::foo::Foo {}
+    "#,
+    );
+}
+
+#[test]
+fn use_() {
+    snapshot_test(
+        r#"
+        // Simple paths
+        use package_name;
+        use self::item_in_scope_or_package_name;
+        use self::module::Item;
+        use package::Item;
+        use self::some::Struct;
+        use package::some_item;
+
+        // Use tree list
+        use crate::{Item};
+        use self::{Item};
+
+        // Wildcard import
+        use *; // Error
+        use ::*; // Error
+        use crate::*;
+        use crate::{*};
+
+        // Renames
+        use some::path as some_name;
+        use some::{
+            other::path as some_other_name,
+            different::path as different_name,
+            yet::another::path,
+            running::out::of::synonyms::for_::different::*
+        };
+        use Foo as _;
+        "#,
+    )
+}
